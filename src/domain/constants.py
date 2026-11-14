@@ -1,0 +1,27 @@
+"""Named business constants for yt_kids_video_pipeline (no magic numbers)."""
+
+MIN_AUDIO_TRACKS: int = 2
+
+MIN_HOOK_DURATION_SEC: float = 8.0
+MAX_HOOK_DURATION_SEC: float = 15.0
+
+MIN_EVENT_GAP_SEC: float = 10.0
+MAX_EVENT_TEXT_WORDS: int = 2
+
+CANVAS_WIDTH: int = 1920
+CANVAS_HEIGHT: int = 1080
+CORNER_ZOOM_15_RATIO: float = 0.85
+FACE_CLOSEUP_50_RATIO: float = 0.50
+
+VOICE_TARGET_LUFS: float = -14.0
+GAME_ATTENUATION_DB: float = -12.0
+MUSIC_DROP_DURATION_SEC: float = 2.0
+
+PROXY_HEIGHT: int = 360
+PROXY_FPS: int = 15
+MILLISECONDS_PER_SECOND: int = 1000
+
+ASSET_INTRO_REL_PATH: str = "00_assets/intro.mp4"
+ASSET_SFX_DIR_REL_PATH: str = "00_assets/sfx"
+ASSET_FONTS_DIR_REL_PATH: str = "00_assets/fonts"
+ASSET_BGM_DIR_REL_PATH: str = "00_assets/bgm"

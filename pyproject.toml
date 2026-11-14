@@ -1,0 +1,48 @@
+[tool.poetry]
+name = "yt_kids_video_pipeline"
+version = "0.1.0"
+description = "Pipeline automatizado de postproducción de video para YouTube Kids (silencios, Gemini, COPPA, FFmpeg)."
+authors = []
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+google-genai = "*"
+pydantic = "^2.0"
+auto-editor = "*"
+Pillow = "*"
+pyyaml = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+pytest-mock = "*"
+pytest-cov = "*"
+ruff = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["ARCHITECTURE_BRIEF.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "N", "PL"]
+ignore = ["PLR0913"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:", "raise NotImplementedError"]

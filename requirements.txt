@@ -1,0 +1,6 @@
+# Runtime (Google Colab). Requiere además binarios del sistema: ffmpeg, ffprobe.
+google-genai
+pydantic>=2.0
+auto-editor
+Pillow
+pyyaml

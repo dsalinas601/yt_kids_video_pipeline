@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+# Datos de video del pipeline
+00_assets/
+01_raw/
+02_staging/
+03_output/
+*.mkv
+*.mp4
+feature_list.json
+docs/
+progress/
+tests/
+init.sh
+ARCHITECTURE_BRIEF.md
+CHECKPOINTS.md
