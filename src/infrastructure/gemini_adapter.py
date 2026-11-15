@@ -7,7 +7,7 @@ from typing import Any
 from src.application.ports import AnalysisResult, TokenUsage
 from src.domain.models import EditorialPlan
 
-DEFAULT_GEMINI_MODEL: str = "gemini-2.5-pro"
+DEFAULT_GEMINI_MODEL: str = "gemini-3.8-flash"
 DEFAULT_POLL_INTERVAL_SEC: float = 2.0
 DEFAULT_MAX_POLL_ATTEMPTS: int = 150
 PROCESSING_STATE_NAME: str = "PROCESSING"
