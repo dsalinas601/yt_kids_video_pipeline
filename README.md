@@ -223,6 +223,7 @@ yt_kids_video_pipeline/
 | Código de salida `1` con mensaje de `GEMINI_API_KEY` | Falta la variable de entorno al requerir análisis multimodal | Exportar `GEMINI_API_KEY` en el entorno o usar caché existente de `editorial_plan.json` sin `--force-reanalyze` |
 | Renderizado usa `libx264 -preset ultrafast` en lugar de GPU | El binario `ffmpeg` del entorno no reporta el codificador `h264_nvenc` | Ejecutar en entorno con GPU NVIDIA y compilación NVENC (Google Colab Pro GPU) |
 | Error `bash` en Windows al ejecutar `./init.sh` | `bash` apunta a WSL sin distribución instalada | Ejecutar `./init.sh` desde Git Bash (`C:\Program Files\Git\bin\bash.exe`) |
+| `clean_base.mp4` incompleto tras desconexión de Colab | El entorno de Colab se desconectó mientras `auto-editor` exportaba el archivo | Al reintentar, el caso de uso detecta el fallo en `ffprobe` y regenera automáticamente `clean_base.mp4` |
 
 ## 12. Mantenimiento
 

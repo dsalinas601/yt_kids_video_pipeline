@@ -47,6 +47,11 @@ class FfmpegCliAdapter:
 
     def generate_proxy(self, clean_video_path: str, proxy_output_path: str) -> str:
         """Generate a 360p/15fps proxy video from clean_base.mp4."""
+        if self._has_nvenc():
+            video_codec_args = ["-c:v", "h264_nvenc", "-preset", "p4"]
+        else:
+            video_codec_args = ["-c:v", "libx264", "-preset", "ultrafast"]
+
         command: list[str] = [
             self._ffmpeg_bin,
             "-y",
@@ -54,10 +59,7 @@ class FfmpegCliAdapter:
             clean_video_path,
             "-vf",
             f"scale=-2:{PROXY_HEIGHT},fps={PROXY_FPS}",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
+            *video_codec_args,
             "-c:a",
             "aac",
             "-b:a",

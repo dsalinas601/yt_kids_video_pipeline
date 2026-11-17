@@ -45,12 +45,14 @@ class ProcessVideoUseCase:
         """Execute all 5 post-production stages sequentially for a single recording."""
         # Stage 1: Probe + validate RawRecording (aborts with InvalidAudioTracksError if <2 tracks)
         t0 = time.perf_counter()
+        self._logger.info("Starting Stage 1 (Probe) for input=%s", input_path)
         raw_recording = self._media_processor.probe_recording(input_path)
         paths = self._storage.ensure_video_directories(video_id)
         self._logger.info("Stage 1 (Probe) completed in %.3fs", time.perf_counter() - t0)
 
         # Stage 2: Silence removal (idempotent if clean_base.mp4 exists)
         t1 = time.perf_counter()
+        self._logger.info("Starting Stage 2 (Silence removal) for video_id=%s", video_id)
         clean_video = self._resolve_clean_video(raw_recording, paths)
         self._logger.info(
             "Stage 2 (Silence removal) completed in %.3fs",
@@ -59,6 +61,7 @@ class ProcessVideoUseCase:
 
         # Stage 3: Proxy 360p/15fps + Multimodal analysis (idempotent unless force_reanalyze)
         t2 = time.perf_counter()
+        self._logger.info("Starting Stage 3 (Multimodal analysis) for video_id=%s", video_id)
         plan, token_usage = self._resolve_editorial_plan(
             clean_video=clean_video,
             paths=paths,
@@ -73,6 +76,7 @@ class ProcessVideoUseCase:
 
         # Stage 4: Final FFmpeg render
         t3 = time.perf_counter()
+        self._logger.info("Starting Stage 4 (Render) for video_id=%s", video_id)
         filter_spec = build_filter_complex(
             plan=plan,
             font_path=paths.font_path,
@@ -89,6 +93,7 @@ class ProcessVideoUseCase:
 
         # Stage 5: Frame extraction, thumbnail generation, and COPPA metadata_and_audit.json
         t4 = time.perf_counter()
+        self._logger.info("Starting Stage 5 (Thumbnail & Audit) for video_id=%s", video_id)
         frame_path = self._media_processor.extract_frame(
             clean_video.file_path,
             plan.metadata.thumbnail_timestamp,
@@ -126,7 +131,14 @@ class ProcessVideoUseCase:
     ) -> CleanVideo:
         if self._storage.exists(paths.clean_base_path):
             self._logger.info("Cache hit for clean_base.mp4: %s", paths.clean_base_path)
-            return self._media_processor.probe_clean_video(paths.clean_base_path)
+            try:
+                return self._media_processor.probe_clean_video(paths.clean_base_path)
+            except Exception as exc:
+                self._logger.warning(
+                    "Cached clean_base.mp4 is corrupted or unreadable (%s); regenerating: %s",
+                    exc,
+                    paths.clean_base_path,
+                )
         return self._silence_remover.remove_silences(raw_recording, paths.clean_base_path)
 
     def _resolve_editorial_plan(
