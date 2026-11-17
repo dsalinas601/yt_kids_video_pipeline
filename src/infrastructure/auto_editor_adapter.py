@@ -1,6 +1,7 @@
 """CLI adapter for auto-editor v29.3.1 silence removal."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 from src.domain.models import CleanVideo, RawRecording
@@ -19,16 +20,18 @@ class AutoEditorCliAdapter:
             raw_recording.file_path,
             "--edit",
             "audio:stream=0",
-            "--video-codec",
-            "libx264",
-            "--preset",
-            "ultrafast",
             "--no-open",
             "--output",
             output_clean_path,
         ]
         try:
             subprocess.run(command, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            Path(output_clean_path).unlink(missing_ok=True)
+            for stream_output in (exc.stdout, exc.stderr):
+                if stream_output:
+                    sys.stderr.write(stream_output)
+            raise
         except BaseException:
             Path(output_clean_path).unlink(missing_ok=True)
             raise
