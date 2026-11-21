@@ -13,6 +13,7 @@ from src.domain.errors import DomainError
 from src.infrastructure.auto_editor_adapter import AutoEditorCliAdapter
 from src.infrastructure.ffmpeg_adapter import FfmpegCliAdapter
 from src.infrastructure.gemini_adapter import GeminiApiAdapter
+from src.infrastructure.gemini_image_adapter import GeminiImageAdapter
 from src.infrastructure.storage_adapter import LocalOrDriveFsAdapter
 from src.infrastructure.thumbnail_adapter import PillowThumbnailAdapter
 
@@ -70,7 +71,11 @@ def run_pipeline(argv: Sequence[str] | None = None) -> int:
     logger, handlers = _configure_logger(log_path)
     try:
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        needs_multimodal = args.force_reanalyze or not storage.exists(paths.editorial_plan_path)
+        needs_multimodal = (
+            args.force_reanalyze
+            or not storage.exists(paths.clean_base_path)
+            or not storage.exists(paths.editorial_plan_path)
+        )
         if needs_multimodal and not api_key:
             logger.error(
                 "Configuration error: GEMINI_API_KEY environment variable is required "
@@ -81,12 +86,14 @@ def run_pipeline(argv: Sequence[str] | None = None) -> int:
         analyzer = (
             GeminiApiAdapter(api_key=api_key) if api_key else cast(MultimodalAnalyzerPort, None)
         )
+        thumbnail_art_generator = GeminiImageAdapter(api_key=api_key) if api_key else None
         use_case = ProcessVideoUseCase(
             media_processor=FfmpegCliAdapter(),
             silence_remover=AutoEditorCliAdapter(),
             multimodal_analyzer=analyzer,
             thumbnail_generator=PillowThumbnailAdapter(),
             storage=storage,
+            thumbnail_art_generator=thumbnail_art_generator,
             logger=logger,
         )
 

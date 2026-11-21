@@ -4,6 +4,7 @@ from src.domain.errors import (
     DomainError,
     InvalidAudioTracksError,
     InvalidTimeSegmentError,
+    ThumbnailArtError,
 )
 from src.domain.models import (
     CleanVideo,
@@ -31,6 +32,7 @@ __all__ = [
     "RawRecording",
     "SafetyFlag",
     "SafetySeverity",
+    "ThumbnailArtError",
     "TimeSegment",
     "VideoMetadata",
     "ZoomType",

@@ -4,11 +4,12 @@ from pydantic import BaseModel, ConfigDict
 
 from src.domain.constants import (
     ASSET_SFX_DIR_REL_PATH,
+    AUDIO_SAMPLE_RATE,
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
     CORNER_ZOOM_15_RATIO,
     FACE_CLOSEUP_50_RATIO,
-    GAME_ATTENUATION_DB,
+    GAME_TARGET_LUFS,
     MILLISECONDS_PER_SECOND,
     MUSIC_DROP_DURATION_SEC,
     VOICE_TARGET_LUFS,
@@ -19,6 +20,7 @@ from src.domain.models import (
     EventCategory,
     SafetyFlag,
     SafetySeverity,
+    TimeSegment,
     ZoomType,
 )
 
@@ -107,9 +109,17 @@ def _build_bgm_drop_filters(events: tuple[DynamicEvent, ...]) -> list[str]:
     ]
 
 
+def _build_ad_exclusion_expr(ad_segments: tuple[TimeSegment, ...]) -> str:
+    clauses = "+".join(
+        f"between(t,{segment.start_sec},{segment.end_sec})" for segment in ad_segments
+    )
+    return f"not({clauses})"
+
+
 def _build_gameplay_video_chain(
     events: tuple[DynamicEvent, ...],
     font_path: str,
+    output_label: str = "[gameplay_v]",
 ) -> list[str]:
     chains: list[str] = []
     current_label = "[v_main_src]"
@@ -139,9 +149,9 @@ def _build_gameplay_video_chain(
         if event.impact_text is not None
     ]
     if drawtext_filters:
-        chains.append(f"{current_label}{','.join(drawtext_filters)}[gameplay_v]")
+        chains.append(f"{current_label}{','.join(drawtext_filters)}{output_label}")
     else:
-        chains.append(f"{current_label}scale={CANVAS_WIDTH}:{CANVAS_HEIGHT}[gameplay_v]")
+        chains.append(f"{current_label}scale={CANVAS_WIDTH}:{CANVAS_HEIGHT}{output_label}")
     return chains
 
 
@@ -153,16 +163,27 @@ def build_filter_complex(
     """Build the complete deterministic FFmpeg filter_complex graph for an EditorialPlan."""
     chains: list[str] = []
 
-    # 1. Split raw clean_base video and voice streams for hook (00:00) + main gameplay
+    # 1. Split raw clean_base video and normalized voice/game audio streams for hook + gameplay
     chains.append("[0:v:0]split=2[v_hook_src][v_main_src]")
 
     coppa_filters = _build_coppa_mute_filters(plan.safety_flags)
+    voice_norm_chain = (
+        f"loudnorm=I={VOICE_TARGET_LUFS}:TP=-1.5:LRA=11,"
+        f"aresample={AUDIO_SAMPLE_RATE},"
+        "asplit=3[voice_hook_src][voice_mix][voice_sc]"
+    )
     if coppa_filters:
-        chains.append(f"[0:a:0]{','.join(coppa_filters)},asplit=2[voice_hook_src][voice_main_src]")
+        chains.append(f"[0:a:0]{','.join(coppa_filters)},{voice_norm_chain}")
     else:
-        chains.append("[0:a:0]asplit=2[voice_hook_src][voice_main_src]")
+        chains.append(f"[0:a:0]{voice_norm_chain}")
 
-    # 2. Extract hook_clip at 00:00 and normalize intro stream timestamps
+    chains.append(
+        f"[0:a:1]loudnorm=I={GAME_TARGET_LUFS}:TP=-1.5:LRA=11,"
+        f"aresample={AUDIO_SAMPLE_RATE},"
+        "asplit=2[game_hook_src][game_att]"
+    )
+
+    # 2. Extract hook_clip at 00:00 (voice + game audio) and normalize intro timestamps
     hook_start = plan.hook_clip.start_sec
     hook_end = plan.hook_clip.end_sec
     chains.append(
@@ -170,21 +191,29 @@ def build_filter_complex(
         f"setpts=PTS-STARTPTS,scale={CANVAS_WIDTH}:{CANVAS_HEIGHT}[hook_v]"
     )
     chains.append(
-        f"[voice_hook_src]atrim=start={hook_start}:end={hook_end},asetpts=PTS-STARTPTS[hook_a]"
+        f"[voice_hook_src]atrim=start={hook_start}:end={hook_end},asetpts=PTS-STARTPTS[hook_voice_a]"
     )
+    chains.append(
+        f"[game_hook_src]atrim=start={hook_start}:end={hook_end},asetpts=PTS-STARTPTS[hook_game_a]"
+    )
+    chains.append("[hook_voice_a][hook_game_a]amix=inputs=2:duration=first:normalize=0[hook_a]")
     chains.append(f"[1:v:0]scale={CANVAS_WIDTH}:{CANVAS_HEIGHT},setpts=PTS-STARTPTS[intro_v]")
     chains.append("[1:a:0]asetpts=PTS-STARTPTS[intro_a]")
 
+    has_ads = bool(plan.ad_segments)
+    gameplay_v_out = "[gameplay_v_fx]" if has_ads else "[gameplay_v]"
+    gameplay_a_out = "[gameplay_a_mix]" if has_ads else "[gameplay_a]"
+
     # 3. Gameplay video: corner-anchored zoom + conditional drawtext
-    chains.extend(_build_gameplay_video_chain(plan.dynamic_events, font_path=font_path))
-
-    # 4. Audio mixing: -14 LUFS voice, -12 dB game, sidechaincompress + Music Drops on bgm, SFX
-    chains.append(
-        f"[voice_main_src]loudnorm=I={VOICE_TARGET_LUFS}:TP=-1.5:LRA=11,"
-        "asplit=2[voice_mix][voice_sc]"
+    chains.extend(
+        _build_gameplay_video_chain(
+            plan.dynamic_events,
+            font_path=font_path,
+            output_label=gameplay_v_out,
+        )
     )
-    chains.append(f"[0:a:1]volume={GAME_ATTENUATION_DB}dB[game_att]")
 
+    # 4. Audio mixing: -14 LUFS voice, -26 LUFS game, sidechaincompress + Music Drops on bgm, SFX
     bgm_drops = _build_bgm_drop_filters(plan.dynamic_events)
     if bgm_drops:
         chains.append(f"[2:a:0]{','.join(bgm_drops)}[bgm_dropped]")
@@ -211,8 +240,14 @@ def build_filter_complex(
     mix_inputs = ["[voice_mix]", "[game_att]", "[bgm_ducked]", *sfx_labels]
     total_mix_inputs = BASE_AUDIO_MIX_INPUTS + len(sfx_labels)
     chains.append(
-        f"{''.join(mix_inputs)}amix=inputs={total_mix_inputs}:duration=first:normalize=0[gameplay_a]"
+        f"{''.join(mix_inputs)}amix=inputs={total_mix_inputs}:"
+        f"duration=first:normalize=0{gameplay_a_out}"
     )
+
+    if has_ads:
+        ad_expr = _build_ad_exclusion_expr(plan.ad_segments)
+        chains.append(f"{gameplay_v_out}select='{ad_expr}',setpts=N/FRAME_RATE/TB[gameplay_v]")
+        chains.append(f"{gameplay_a_out}aselect='{ad_expr}',asetpts=N/SR/TB[gameplay_a]")
 
     # 5. Strict chronological concatenation: hook (00:00) -> intro -> gameplay
     chains.append(

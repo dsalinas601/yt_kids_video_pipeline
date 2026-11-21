@@ -4,6 +4,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src.domain.constants import (
+    SILENCE_MARGIN_AFTER_SEC,
+    SILENCE_MARGIN_BEFORE_SEC,
+    SILENCE_MIN_CLIP_SEC,
+    SILENCE_MIN_CUT_SEC,
+)
 from src.domain.models import CleanVideo, RawRecording
 
 
@@ -20,6 +26,10 @@ class AutoEditorCliAdapter:
             raw_recording.file_path,
             "--edit",
             "audio:stream=0",
+            "--margin",
+            f"{SILENCE_MARGIN_BEFORE_SEC}s,{SILENCE_MARGIN_AFTER_SEC}s",
+            "--smooth",
+            f"{SILENCE_MIN_CUT_SEC}s,{SILENCE_MIN_CLIP_SEC}s",
             "--no-open",
             "--output",
             output_clean_path,

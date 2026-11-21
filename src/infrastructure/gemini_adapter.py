@@ -1,4 +1,4 @@
-"""Gemini 2.5 Pro multimodal analyzer adapter using Google GenAI File API."""
+"""Gemini multimodal analyzer adapter using Google GenAI File API."""
 
 import time
 from collections.abc import Callable
@@ -15,12 +15,17 @@ ACTIVE_STATE_NAME: str = "ACTIVE"
 
 ANALYSIS_PROMPT: str = (
     "Analiza este video proxy de gaming infantil en español para YouTube Kids. "
-    "Identifica: 1) el mejor hook_clip inicial de 8 a 15 segundos, "
+    "Identifica: 1) el mejor hook_clip inicial de 8 a 15 segundos (nunca sobre un anuncio), "
     "2) eventos dinámicos clave (SURPRISE, LAUGH, VICTORY, FAIL) con tipo de zoom "
     "(CORNER_ZOOM_15 o FACE_CLOSEUP_50) y texto corto opcional de máximo 2 palabras, "
     "3) auditoría COPPA de safety_flags (WARNING o CRITICAL por datos personales o "
-    "lenguaje inapropiado), y 4) metadata sugerida con títulos, descripción y "
-    "thumbnail_timestamp."
+    "lenguaje inapropiado), 4) metadata sugerida con títulos, descripción, "
+    "thumbnail_timestamp, thumbnail_text, game_title (nombre del videojuego) y "
+    "thumbnail_scene (descripción breve de la escena visual del juego en ese momento, "
+    "sin describir personas reales), y 5) ad_segments: rangos donde aparece publicidad dentro del "
+    "juego (pantalla completa de otro juego/producto, etiquetas 'Ad'/'Anuncio', botones "
+    "de cerrar 'X' o cuenta regresiva, botones de tienda externa). NO marcar tiendas "
+    "internas del juego, menús ni pantallas de carga. Mínimo 2 segundos."
 )
 
 

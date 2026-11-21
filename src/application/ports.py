@@ -38,6 +38,8 @@ class VideoWorkspacePaths:
     bgm_path: str
     font_path: str
     sfx_dir: str
+    masked_frame_path: str = ""
+    thumbnail_art_path: str = ""
 
 
 class SilenceRemoverPort(Protocol):
@@ -85,8 +87,28 @@ class MediaProcessorPort(Protocol):
         """Render final_video.mp4 using the domain FilterComplexSpec."""
 
 
+class ThumbnailArtGeneratorPort(Protocol):
+    """Port for generating stylized YouTube Kids thumbnail background art."""
+
+    def generate_art(
+        self,
+        reference_image_path: str,
+        scene_prompt: str,
+        output_image_path: str,
+    ) -> str:
+        """Generate stylized 16:9 thumbnail art from a masked reference frame."""
+
+
 class ThumbnailGeneratorPort(Protocol):
-    """Port for enhancing extracted frames and overlaying thumbnail text."""
+    """Port for masking facecam, enhancing frames, and composing final thumbnails."""
+
+    def mask_region(
+        self,
+        source_image_path: str,
+        region: tuple[float, float, float, float],
+        output_image_path: str,
+    ) -> str:
+        """Mask out a normalized (x, y, w, h) region on the frame before AI processing."""
 
     def generate_thumbnail(
         self,
@@ -94,8 +116,11 @@ class ThumbnailGeneratorPort(Protocol):
         text: str,
         font_path: str,
         output_thumbnail_path: str,
+        *,
+        face_source_path: str | None = None,
+        face_region: tuple[float, float, float, float] | None = None,
     ) -> str:
-        """Generate final thumbnail image."""
+        """Generate final thumbnail image, optionally compositing real facecam."""
 
 
 class StorageRepositoryPort(Protocol):

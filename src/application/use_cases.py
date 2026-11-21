@@ -9,10 +9,13 @@ from src.application.ports import (
     MultimodalAnalyzerPort,
     SilenceRemoverPort,
     StorageRepositoryPort,
+    ThumbnailArtGeneratorPort,
     ThumbnailGeneratorPort,
     TokenUsage,
     VideoWorkspacePaths,
 )
+from src.domain.constants import FACECAM_REGION
+from src.domain.errors import ThumbnailArtError
 from src.domain.ffmpeg_builder import build_filter_complex
 from src.domain.models import CleanVideo, EditorialPlan, PipelineOutput, SafetySeverity
 
@@ -27,6 +30,7 @@ class ProcessVideoUseCase:
         multimodal_analyzer: MultimodalAnalyzerPort,
         thumbnail_generator: ThumbnailGeneratorPort,
         storage: StorageRepositoryPort,
+        thumbnail_art_generator: ThumbnailArtGeneratorPort | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._media_processor = media_processor
@@ -34,6 +38,7 @@ class ProcessVideoUseCase:
         self._multimodal_analyzer = multimodal_analyzer
         self._thumbnail_generator = thumbnail_generator
         self._storage = storage
+        self._thumbnail_art_generator = thumbnail_art_generator
         self._logger = logger or logging.getLogger(__name__)
 
     def execute(
@@ -53,7 +58,12 @@ class ProcessVideoUseCase:
         # Stage 2: Silence removal (idempotent if clean_base.mp4 exists)
         t1 = time.perf_counter()
         self._logger.info("Starting Stage 2 (Silence removal) for video_id=%s", video_id)
-        clean_video = self._resolve_clean_video(raw_recording, paths)
+        clean_video, clean_regenerated = self._resolve_clean_video(raw_recording, paths)
+        if clean_regenerated and self._storage.exists(paths.editorial_plan_path):
+            self._logger.warning(
+                "clean_base.mp4 regenerated; invalidating cached editorial_plan.json: %s",
+                paths.editorial_plan_path,
+            )
         self._logger.info(
             "Stage 2 (Silence removal) completed in %.3fs",
             time.perf_counter() - t1,
@@ -65,7 +75,7 @@ class ProcessVideoUseCase:
         plan, token_usage = self._resolve_editorial_plan(
             clean_video=clean_video,
             paths=paths,
-            force_reanalyze=force_reanalyze,
+            force_reanalyze=force_reanalyze or clean_regenerated,
         )
         self._logger.info(
             "Stage 3 (Multimodal analysis) completed in %.3fs | input_tokens=%d output_tokens=%d",
@@ -100,11 +110,18 @@ class ProcessVideoUseCase:
             paths.frame_image_path,
         )
         thumb_text = plan.metadata.thumbnail_text or plan.metadata.titles[0]
+        base_image_path, face_source_path, face_region = self._resolve_thumbnail_base(
+            frame_path=frame_path,
+            plan=plan,
+            paths=paths,
+        )
         thumbnail_path = self._thumbnail_generator.generate_thumbnail(
-            frame_path,
+            base_image_path,
             thumb_text,
             paths.font_path,
             paths.thumbnail_path,
+            face_source_path=face_source_path,
+            face_region=face_region,
         )
         audit_payload = _build_audit_payload(
             video_id=video_id,
@@ -128,18 +145,18 @@ class ProcessVideoUseCase:
         self,
         raw_recording: Any,
         paths: VideoWorkspacePaths,
-    ) -> CleanVideo:
+    ) -> tuple[CleanVideo, bool]:
         if self._storage.exists(paths.clean_base_path):
             self._logger.info("Cache hit for clean_base.mp4: %s", paths.clean_base_path)
             try:
-                return self._media_processor.probe_clean_video(paths.clean_base_path)
+                return self._media_processor.probe_clean_video(paths.clean_base_path), False
             except Exception as exc:
                 self._logger.warning(
                     "Cached clean_base.mp4 is corrupted or unreadable (%s); regenerating: %s",
                     exc,
                     paths.clean_base_path,
                 )
-        return self._silence_remover.remove_silences(raw_recording, paths.clean_base_path)
+        return self._silence_remover.remove_silences(raw_recording, paths.clean_base_path), True
 
     def _resolve_editorial_plan(
         self,
@@ -162,6 +179,47 @@ class ProcessVideoUseCase:
         analysis = self._multimodal_analyzer.analyze_video(proxy_path)
         self._storage.save_editorial_plan(analysis.plan, paths.editorial_plan_path)
         return analysis.plan, analysis.token_usage
+
+    def _resolve_thumbnail_base(
+        self,
+        frame_path: str,
+        plan: EditorialPlan,
+        paths: VideoWorkspacePaths,
+    ) -> tuple[str, str | None, tuple[float, float, float, float] | None]:
+        if self._thumbnail_art_generator is None:
+            return frame_path, None, None
+
+        masked_output = paths.masked_frame_path or f"{frame_path}.masked.png"
+        art_output = paths.thumbnail_art_path or f"{frame_path}.art.png"
+        try:
+            masked_frame = self._thumbnail_generator.mask_region(
+                frame_path,
+                FACECAM_REGION,
+                masked_output,
+            )
+            art_path = self._thumbnail_art_generator.generate_art(
+                masked_frame,
+                _build_thumbnail_scene_prompt(plan),
+                art_output,
+            )
+            return art_path, frame_path, FACECAM_REGION
+        except ThumbnailArtError as exc:
+            self._logger.warning(
+                "AI thumbnail generation failed (%s); falling back to classic frame thumbnail.",
+                exc,
+            )
+            return frame_path, None, None
+
+
+def _build_thumbnail_scene_prompt(plan: EditorialPlan) -> str:
+    parts: list[str] = []
+    if plan.metadata.game_title.strip():
+        parts.append(f"Juego: {plan.metadata.game_title.strip()}")
+    if plan.metadata.thumbnail_scene.strip():
+        parts.append(f"Escena: {plan.metadata.thumbnail_scene.strip()}")
+    if not parts:
+        parts.append(f"Tema del video: {plan.metadata.titles[0]}")
+    return ". ".join(parts)
 
 
 def _build_audit_payload(
@@ -196,6 +254,14 @@ def _build_audit_payload(
                 for flag in critical_flags
             ],
         },
+        "ad_cuts": [
+            {
+                "start_sec": segment.start_sec,
+                "end_sec": segment.end_sec,
+            }
+            for segment in plan.ad_segments
+        ],
+        "total_ad_sec_removed": plan.total_ad_sec_removed,
         "token_usage": {
             "input_tokens": token_usage.input_tokens,
             "output_tokens": token_usage.output_tokens,

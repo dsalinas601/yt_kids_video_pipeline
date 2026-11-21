@@ -5,6 +5,8 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.domain.constants import (
+    AD_MAX_DURATION_SEC,
+    AD_MIN_DURATION_SEC,
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
     MAX_EVENT_TEXT_WORDS,
@@ -64,6 +66,14 @@ class TimeSegment(BaseModel):
     def duration(self) -> float:
         """Return segment duration in seconds."""
         return self.end_sec - self.start_sec
+
+    def overlaps(self, other: "TimeSegment") -> bool:
+        """Return whether two time segments overlap with positive intersection."""
+        return self.start_sec < other.end_sec and other.start_sec < self.end_sec
+
+    def contains(self, timestamp_sec: float) -> bool:
+        """Return whether timestamp_sec lies within [start_sec, end_sec]."""
+        return self.start_sec <= timestamp_sec <= self.end_sec
 
 
 class RawRecording(BaseModel):
@@ -179,6 +189,8 @@ class VideoMetadata(BaseModel):
     thumbnail_timestamp: float
     thumbnail_text: str = ""
     tags: tuple[str, ...] = ()
+    game_title: str = ""
+    thumbnail_scene: str = ""
 
     @model_validator(mode="after")
     def _validate_metadata(self) -> "VideoMetadata":
@@ -189,14 +201,34 @@ class VideoMetadata(BaseModel):
         return self
 
 
+def _normalize_ad_segments(segments: tuple[TimeSegment, ...]) -> tuple[TimeSegment, ...]:
+    valid = [
+        segment
+        for segment in segments
+        if AD_MIN_DURATION_SEC <= segment.duration <= AD_MAX_DURATION_SEC
+    ]
+    sorted_ads = sorted(valid, key=lambda seg: (seg.start_sec, seg.end_sec))
+    merged: list[TimeSegment] = []
+    for seg in sorted_ads:
+        if merged and seg.start_sec <= merged[-1].end_sec:
+            merged[-1] = TimeSegment(
+                start_sec=merged[-1].start_sec,
+                end_sec=max(merged[-1].end_sec, seg.end_sec),
+            )
+        else:
+            merged.append(seg)
+    return tuple(merged)
+
+
 class EditorialPlan(BaseModel):
-    """Aggregate root enforcing hook bounds and non-overlapping dynamic events."""
+    """Aggregate root enforcing hook bounds, ad rules, and non-overlapping dynamic events."""
 
     model_config = ConfigDict(frozen=True)
 
     hook_clip: TimeSegment
     dynamic_events: tuple[DynamicEvent, ...] = Field(default=())
     safety_flags: tuple[SafetyFlag, ...] = Field(default=())
+    ad_segments: tuple[TimeSegment, ...] = Field(default=())
     metadata: VideoMetadata
 
     @model_validator(mode="after")
@@ -213,8 +245,18 @@ class EditorialPlan(BaseModel):
             )
             object.__setattr__(self, "hook_clip", truncated)
 
+        normalized_ads = _normalize_ad_segments(self.ad_segments)
+        object.__setattr__(self, "ad_segments", normalized_ads)
+
+        if any(ad.overlaps(self.hook_clip) for ad in normalized_ads):
+            raise DomainError("EditorialPlan hook_clip must not overlap any ad_segment.")
+
         sorted_events = sorted(
-            self.dynamic_events,
+            (
+                event
+                for event in self.dynamic_events
+                if not any(ad.overlaps(event.segment) for ad in normalized_ads)
+            ),
             key=lambda event: (event.segment.start_sec, event.segment.end_sec),
         )
         kept: list[DynamicEvent] = []
@@ -225,6 +267,11 @@ class EditorialPlan(BaseModel):
             ):
                 kept.append(event)
         object.__setattr__(self, "dynamic_events", tuple(kept))
+
+        if any(ad.contains(self.metadata.thumbnail_timestamp) for ad in normalized_ads):
+            midpoint = (self.hook_clip.start_sec + self.hook_clip.end_sec) / 2.0
+            relocated = self.metadata.model_copy(update={"thumbnail_timestamp": midpoint})
+            object.__setattr__(self, "metadata", relocated)
         return self
 
     @property
@@ -236,6 +283,11 @@ class EditorialPlan(BaseModel):
     def has_critical_flags(self) -> bool:
         """Return whether the plan contains at least one CRITICAL safety flag."""
         return bool(self.critical_safety_flags)
+
+    @property
+    def total_ad_sec_removed(self) -> float:
+        """Return total duration in seconds of normalized ad segments."""
+        return sum(segment.duration for segment in self.ad_segments)
 
 
 class PipelineOutput(BaseModel):

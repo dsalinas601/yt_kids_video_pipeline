@@ -11,3 +11,7 @@ class InvalidAudioTracksError(DomainError):
 
 class InvalidTimeSegmentError(DomainError):
     """Raised when a TimeSegment has invalid or non-positive bounds."""
+
+
+class ThumbnailArtError(DomainError):
+    """Raised when AI thumbnail background generation fails or is blocked."""

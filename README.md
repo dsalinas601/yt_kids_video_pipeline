@@ -4,10 +4,10 @@
 
 | | |
 |---|---|
-| **Estado** | Completado (6/6 features implementadas y verificadas) |
+| **Estado** | Completado (11/11 tareas implementadas y verificadas) |
 | **Responsable** | NO DOCUMENTADO (sin equipo ni autores definidos en `PROJECT.md` ni `pyproject.toml`) |
 | **Repositorio** | NO DOCUMENTADO (sin remoto Git configurado) |
-| **Última actualización** | 2026-11-14 |
+| **Última actualización** | 2026-11-20 |
 
 > ⚠️ NO DOCUMENTADO: Responsable del proyecto y URL del repositorio remoto.
 
@@ -181,7 +181,7 @@ Resultado esperado: generación de `final_video.mp4`, `thumbnail.jpg`, `metadata
 python -m pytest tests/ --cov=src --cov-report=term-missing
 ```
 
-La suite actual cuenta con 52 pruebas automatizadas (unitarias en `tests/unit/` e integración con dobles en `tests/integration/infrastructure/`) con 100.00% de cobertura en `src/domain/` y 100.00% global. No realizan llamadas reales a red ni requieren `ffmpeg`, `ffprobe` o `auto-editor` instalados porque subprocesos y SDK se validan mediante mocks; la prueba de humo end-to-end con binarios reales en Google Colab Pro GPU se ejecuta manualmente según `docs/verification.md`.
+La suite actual cuenta con 69 pruebas automatizadas (unitarias en `tests/unit/` e integración con dobles en `tests/integration/infrastructure/`) con 100.00% de cobertura en `src/domain/` y 100.00% global. No realizan llamadas reales a red ni requieren `ffmpeg`, `ffprobe` o `auto-editor` instalados porque subprocesos y SDK se validan mediante mocks; la prueba de humo end-to-end con binarios reales en Google Colab Pro GPU se ejecuta manualmente según `docs/verification.md`.
 
 ## 9. Estructura del repositorio
 

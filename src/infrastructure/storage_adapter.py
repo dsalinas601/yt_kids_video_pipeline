@@ -50,6 +50,8 @@ class LocalOrDriveFsAdapter:
             bgm_path=bgm_path,
             font_path=font_path,
             sfx_dir=str(sfx_dir),
+            masked_frame_path=str(staging_dir / "thumb_masked.png"),
+            thumbnail_art_path=str(staging_dir / "thumb_art.png"),
         )
 
     def exists(self, path: str) -> bool:
