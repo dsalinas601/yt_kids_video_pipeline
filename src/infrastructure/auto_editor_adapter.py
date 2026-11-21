@@ -20,16 +20,18 @@ class AutoEditorCliAdapter:
         self._executable = executable
 
     def remove_silences(self, raw_recording: RawRecording, output_clean_path: str) -> CleanVideo:
-        """Analyze voice track 0:a:0 only and export clean_base.mp4 preserving separate tracks."""
+        """Analyze voice track 0:a:0 only and export clean_base.mp4 preserving separate tracks.
+
+        auto-editor 29.3.1 has no ``--smooth`` option: mincut/minclip are attributes
+        of the ``audio`` edit method (``audio:stream=0,mincut=...,minclip=...``).
+        """
         command: list[str] = [
             self._executable,
             raw_recording.file_path,
             "--edit",
-            "audio:stream=0",
+            f"audio:stream=0,mincut={SILENCE_MIN_CUT_SEC}s,minclip={SILENCE_MIN_CLIP_SEC}s",
             "--margin",
             f"{SILENCE_MARGIN_BEFORE_SEC}s,{SILENCE_MARGIN_AFTER_SEC}s",
-            "--smooth",
-            f"{SILENCE_MIN_CUT_SEC}s,{SILENCE_MIN_CLIP_SEC}s",
             "--no-open",
             "--output",
             output_clean_path,
