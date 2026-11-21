@@ -1,13 +1,16 @@
 """Gemini multimodal analyzer adapter using Google GenAI File API."""
 
+import json
 import logging
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
 from src.application.ports import AnalysisResult, TokenUsage
-from src.domain.models import EditorialPlan
+from src.domain.errors import DomainError
+from src.domain.models import EditorialPlan, sanitize_editorial_plan_dict
 
+DEFAULT_LOGGER_NAME: str = "yt_kids_video_pipeline"
 DEFAULT_GEMINI_MODEL: str = "gemini-3.8-flash"
 DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
     "gemini-3.6-flash",
@@ -39,7 +42,10 @@ ANALYSIS_PROMPT: str = (
     "sin describir personas reales), y 5) ad_segments: rangos donde aparece publicidad dentro del "
     "juego (pantalla completa de otro juego/producto, etiquetas 'Ad'/'Anuncio', botones "
     "de cerrar 'X' o cuenta regresiva, botones de tienda externa). NO marcar tiendas "
-    "internas del juego, menús ni pantallas de carga. Mínimo 2 segundos."
+    "internas del juego, menús ni pantallas de carga. Mínimo 2 segundos. "
+    "IMPORTANTE: Todos los tiempos (start_sec, end_sec, thumbnail_timestamp) deben "
+    "expresarse en segundos totales desde el inicio del video (MM*60 + SS), cumpliendo "
+    "siempre 0 <= start_sec < end_sec."
 )
 
 
@@ -67,25 +73,23 @@ class GeminiApiAdapter:
         self._poll_interval_sec = poll_interval_sec
         self._max_poll_attempts = max_poll_attempts
         self._sleep_fn = sleep_fn
-        self._logger = logger or logging.getLogger(__name__)
+        self._logger = logger or logging.getLogger(DEFAULT_LOGGER_NAME)
 
     def analyze_video(self, proxy_video_path: str) -> AnalysisResult:
         """Upload proxy to File API, poll until ACTIVE, analyze with model fallback, and delete."""
         uploaded_file = self._client.files.upload(file=proxy_video_path)
         try:
             active_file = self._wait_until_active(uploaded_file)
-            response = self._generate_with_fallback(active_file)
-            plan = self._extract_plan(response)
-            token_usage = self._extract_token_usage(response)
+            plan, token_usage = self._generate_with_fallback(active_file)
             return AnalysisResult(plan=plan, token_usage=token_usage)
         finally:
             self._client.files.delete(name=uploaded_file.name)
 
-    def _generate_with_fallback(self, active_file: Any) -> Any:
+    def _generate_with_fallback(self, active_file: Any) -> tuple[EditorialPlan, TokenUsage]:
         models_to_try = (self._model_name, *self._fallback_models)
         for idx, candidate_model in enumerate(models_to_try):
             try:
-                return self._client.models.generate_content(
+                response = self._client.models.generate_content(
                     model=candidate_model,
                     contents=[active_file, ANALYSIS_PROMPT],
                     config={
@@ -93,13 +97,20 @@ class GeminiApiAdapter:
                         "response_schema": EditorialPlan,
                     },
                 )
+                plan = self._extract_plan(response)
+                token_usage = self._extract_token_usage(response)
+                self._logger.info(
+                    "Gemini multimodal analysis completed using model '%s'.",
+                    candidate_model,
+                )
+                return plan, token_usage
             except Exception as exc:
                 has_next_model = idx + 1 < len(models_to_try)
                 if not (has_next_model and self._is_fallback_eligible(exc)):
                     raise
                 next_model = models_to_try[idx + 1]
                 self._logger.warning(
-                    "Gemini model '%s' unavailable (%s); falling back to '%s'.",
+                    "Gemini model '%s' failed (%s); falling back to '%s'.",
                     candidate_model,
                     exc,
                     next_model,
@@ -108,6 +119,8 @@ class GeminiApiAdapter:
 
     @staticmethod
     def _is_fallback_eligible(exc: Exception) -> bool:
+        if isinstance(exc, DomainError):
+            return True
         code = getattr(exc, "code", None)
         if isinstance(code, int) and code in RETRYABLE_STATUS_CODES:
             return True
@@ -132,8 +145,10 @@ class GeminiApiAdapter:
             )
         return current_file
 
-    @staticmethod
-    def _extract_plan(response: Any) -> EditorialPlan:
+    def _extract_plan(self, response: Any) -> EditorialPlan:
+        _, warnings = sanitize_editorial_plan_dict(json.loads(response.text))
+        for warning_msg in warnings:
+            self._logger.warning("%s", warning_msg)
         parsed = getattr(response, "parsed", None)
         if isinstance(parsed, EditorialPlan):
             return parsed

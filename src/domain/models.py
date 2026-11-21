@@ -1,6 +1,7 @@
 """Immutable domain entities, value objects, and pure business rules."""
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -9,6 +10,7 @@ from src.domain.constants import (
     AD_MIN_DURATION_SEC,
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
+    DEFAULT_POINT_EVENT_DURATION_SEC,
     MAX_EVENT_TEXT_WORDS,
     MAX_HOOK_DURATION_SEC,
     MIN_AUDIO_TRACKS,
@@ -50,8 +52,12 @@ class TimeSegment(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    start_sec: float
-    end_sec: float
+    start_sec: float = Field(
+        description="Inicio del segmento en segundos totales desde 0.0 (MM*60 + SS >= 0)."
+    )
+    end_sec: float = Field(
+        description="Fin del segmento en segundos totales (MM*60 + SS, estrictamente > start_sec)."
+    )
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> "TimeSegment":
@@ -220,6 +226,89 @@ def _normalize_ad_segments(segments: tuple[TimeSegment, ...]) -> tuple[TimeSegme
     return tuple(merged)
 
 
+def sanitize_editorial_plan_dict(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Sanitize raw JSON dictionary for EditorialPlan.
+
+    - Logs warning if mandatory ``hook_clip`` has invalid bounds (caller/validator will reject).
+    - Discards inverted or zero-length ``ad_segments`` and ``safety_flags`` (never reorders).
+    - Rescues point ``dynamic_events`` (``start_sec == end_sec >= 0``) by expanding ``end_sec``
+      by ``DEFAULT_POINT_EVENT_DURATION_SEC`` (+3.0s), and discards inverted/negative ones.
+    """
+    sanitized = dict(data)
+    warnings: list[str] = []
+
+    raw_hook = sanitized.get("hook_clip")
+    if isinstance(raw_hook, dict):
+        hook_start = float(raw_hook["start_sec"])
+        hook_end = float(raw_hook["end_sec"])
+        if hook_start < 0 or hook_end <= hook_start:
+            warnings.append(f"Invalid mandatory hook_clip TimeSegment [{hook_start}, {hook_end}].")
+
+    clean_ads: list[Any] = []
+    for idx, item in enumerate(sanitized.get("ad_segments") or ()):
+        if isinstance(item, dict):
+            start_sec = float(item["start_sec"])
+            end_sec = float(item["end_sec"])
+            if start_sec < 0 or end_sec <= start_sec:
+                warnings.append(
+                    f"Discarded invalid TimeSegment [{start_sec}, {end_sec}] in ad_segments[{idx}]."
+                )
+                continue
+        clean_ads.append(item)
+    sanitized["ad_segments"] = clean_ads
+
+    clean_events: list[Any] = []
+    for idx, item in enumerate(sanitized.get("dynamic_events") or ()):
+        if isinstance(item, dict):
+            seg = item["segment"]
+            start_sec = float(seg["start_sec"])
+            end_sec = float(seg["end_sec"])
+            category = item.get("category", "UNKNOWN")
+            if start_sec >= 0 and end_sec == start_sec:
+                expanded_end = start_sec + DEFAULT_POINT_EVENT_DURATION_SEC
+                clean_events.append(
+                    {
+                        **item,
+                        "segment": {"start_sec": start_sec, "end_sec": expanded_end},
+                    }
+                )
+                warnings.append(
+                    f"Expanded point TimeSegment [{start_sec}, {end_sec}] to "
+                    f"[{start_sec}, {expanded_end}] in dynamic_events[{idx}] "
+                    f"(category={category})."
+                )
+                continue
+            if start_sec < 0 or end_sec < start_sec:
+                warnings.append(
+                    f"Discarded invalid TimeSegment [{start_sec}, {end_sec}] "
+                    f"in dynamic_events[{idx}] (category={category})."
+                )
+                continue
+        clean_events.append(item)
+    sanitized["dynamic_events"] = clean_events
+
+    clean_flags: list[Any] = []
+    for idx, item in enumerate(sanitized.get("safety_flags") or ()):
+        if isinstance(item, dict):
+            seg = item["segment"]
+            start_sec = float(seg["start_sec"])
+            end_sec = float(seg["end_sec"])
+            if start_sec < 0 or end_sec <= start_sec:
+                severity = item.get("severity", "UNKNOWN")
+                reason = item.get("reason", "")
+                warnings.append(
+                    f"Discarded invalid TimeSegment [{start_sec}, {end_sec}] "
+                    f"in safety_flags[{idx}] (severity={severity}, reason={reason})."
+                )
+                continue
+        clean_flags.append(item)
+    sanitized["safety_flags"] = clean_flags
+
+    return sanitized, warnings
+
+
 class EditorialPlan(BaseModel):
     """Aggregate root enforcing hook bounds, ad rules, and non-overlapping dynamic events."""
 
@@ -230,6 +319,12 @@ class EditorialPlan(BaseModel):
     safety_flags: tuple[SafetyFlag, ...] = Field(default=())
     ad_segments: tuple[TimeSegment, ...] = Field(default=())
     metadata: VideoMetadata
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_raw_segments(cls, data: dict[str, Any]) -> dict[str, Any]:
+        sanitized, _ = sanitize_editorial_plan_dict(data)
+        return sanitized
 
     @model_validator(mode="after")
     def _enforce_editorial_rules(self) -> "EditorialPlan":
