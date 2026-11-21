@@ -1,13 +1,27 @@
 """Gemini multimodal analyzer adapter using Google GenAI File API."""
 
+import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from src.application.ports import AnalysisResult, TokenUsage
 from src.domain.models import EditorialPlan
 
 DEFAULT_GEMINI_MODEL: str = "gemini-3.8-flash"
+DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+)
+RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+RETRYABLE_ERROR_MARKERS: tuple[str, ...] = (
+    "503",
+    "UNAVAILABLE",
+    "429",
+    "RESOURCE_EXHAUSTED",
+    "HIGH DEMAND",
+    "OVERLOADED",
+)
 DEFAULT_POLL_INTERVAL_SEC: float = 2.0
 DEFAULT_MAX_POLL_ATTEMPTS: int = 150
 PROCESSING_STATE_NAME: str = "PROCESSING"
@@ -37,9 +51,11 @@ class GeminiApiAdapter:
         api_key: str | None = None,
         client: Any | None = None,
         model_name: str = DEFAULT_GEMINI_MODEL,
+        fallback_models: Sequence[str] = DEFAULT_FALLBACK_MODELS,
         poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         max_poll_attempts: int = DEFAULT_MAX_POLL_ATTEMPTS,
         sleep_fn: Callable[[float], None] = time.sleep,
+        logger: logging.Logger | None = None,
     ) -> None:
         if client is None:
             from google import genai  # noqa: PLC0415
@@ -47,28 +63,56 @@ class GeminiApiAdapter:
             client = genai.Client(api_key=api_key)
         self._client = client
         self._model_name = model_name
+        self._fallback_models: tuple[str, ...] = tuple(fallback_models)
         self._poll_interval_sec = poll_interval_sec
         self._max_poll_attempts = max_poll_attempts
         self._sleep_fn = sleep_fn
+        self._logger = logger or logging.getLogger(__name__)
 
     def analyze_video(self, proxy_video_path: str) -> AnalysisResult:
-        """Upload proxy to File API, poll until ACTIVE, analyze, and delete in finally."""
+        """Upload proxy to File API, poll until ACTIVE, analyze with model fallback, and delete."""
         uploaded_file = self._client.files.upload(file=proxy_video_path)
         try:
             active_file = self._wait_until_active(uploaded_file)
-            response = self._client.models.generate_content(
-                model=self._model_name,
-                contents=[active_file, ANALYSIS_PROMPT],
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": EditorialPlan,
-                },
-            )
+            response = self._generate_with_fallback(active_file)
             plan = self._extract_plan(response)
             token_usage = self._extract_token_usage(response)
             return AnalysisResult(plan=plan, token_usage=token_usage)
         finally:
             self._client.files.delete(name=uploaded_file.name)
+
+    def _generate_with_fallback(self, active_file: Any) -> Any:
+        models_to_try = (self._model_name, *self._fallback_models)
+        for idx, candidate_model in enumerate(models_to_try):
+            try:
+                return self._client.models.generate_content(
+                    model=candidate_model,
+                    contents=[active_file, ANALYSIS_PROMPT],
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_schema": EditorialPlan,
+                    },
+                )
+            except Exception as exc:
+                has_next_model = idx + 1 < len(models_to_try)
+                if not (has_next_model and self._is_fallback_eligible(exc)):
+                    raise
+                next_model = models_to_try[idx + 1]
+                self._logger.warning(
+                    "Gemini model '%s' unavailable (%s); falling back to '%s'.",
+                    candidate_model,
+                    exc,
+                    next_model,
+                )
+        raise RuntimeError("No Gemini models configured for analysis.")  # pragma: no cover
+
+    @staticmethod
+    def _is_fallback_eligible(exc: Exception) -> bool:
+        code = getattr(exc, "code", None)
+        if isinstance(code, int) and code in RETRYABLE_STATUS_CODES:
+            return True
+        message = str(exc).upper()
+        return any(marker in message for marker in RETRYABLE_ERROR_MARKERS)
 
     def _wait_until_active(self, uploaded_file: Any) -> Any:
         current_file = uploaded_file
