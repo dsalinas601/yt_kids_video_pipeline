@@ -126,8 +126,10 @@ DEFAULT_PII_PATTERNS: tuple[PiiPatternRule, ...] = (
     PiiPatternRule(
         id="pii_location",
         pattern=(
-            r"(?i)\b(vivo en|mi dirección es|mi direccion es|"
-            r"vivo por la calle|mi casa queda en|la calle donde vivo|mi barrio es)\b"
+            r"(?i)(\b(vivo en|mi dirección es|mi direccion es|"
+            r"vivo por la calle|mi casa queda en|la calle donde vivo|mi barrio es)\b|"
+            r"\bcalle\s+[a-záéíóúñ0-9]+\b|"
+            r"\b\d{1,3}[,\s]+(?:[a-záéíóúñ]{1,4}\s+)?sur\b)"
         ),
         reason="Mención de dirección o ubicación física (PII)",
     ),
@@ -140,7 +142,7 @@ DEFAULT_PII_PATTERNS: tuple[PiiPatternRule, ...] = (
         id="pii_phone",
         pattern=(
             r"(?i)(\b(?:\+?\d{1,3}[\s-]?)?(?:\d[\s-]?){7,10}\b|"
-            r"\b(mi número es|mi numero es|mi teléfono es|mi telefono es|"
+            r"\b(mi número|mi numero|mi teléfono|mi telefono|"
             r"mi celular es|llámenme al|llamenme al)\b)"
         ),
         reason="Posible número telefónico (PII)",

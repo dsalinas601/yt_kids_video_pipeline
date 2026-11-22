@@ -1,6 +1,7 @@
 """CLI adapter for ffprobe and ffmpeg media processing."""
 
 import json
+import re
 import subprocess
 from fractions import Fraction
 from typing import Any
@@ -14,10 +15,35 @@ from src.domain.constants import (
     VOICE_TRACK_CHANNELS,
     VOICE_TRACK_SAMPLE_RATE,
 )
-from src.domain.ffmpeg_builder import FilterComplexSpec
+from src.domain.ffmpeg_builder import BASE_AUDIO_MIX_INPUTS, FilterComplexSpec
 from src.domain.models import CleanVideo, RawRecording
 
 DEFAULT_SUBPROCESS_TIMEOUT_SEC: float = 1800.0
+
+
+def _isolate_hook_input(filter_complex: str, hook_input_idx: int) -> str:
+    """Decouple hook streams into a separate input demuxer to prevent OOM frame buffering."""
+    isolated = filter_complex.replace(
+        "[0:v:0]split=2[v_hook_src][v_main_src]",
+        f"[{hook_input_idx}:v:0]null[v_hook_src];[0:v:0]null[v_main_src]",
+    )
+    isolated = re.sub(
+        r"\[0:a:0\]([^;]*?),asplit=3\[voice_hook_src\]\[voice_mix\]\[voice_sc\]",
+        (
+            r"[0:a:0]\1,asplit=2[voice_mix][voice_sc];"
+            rf"[{hook_input_idx}:a:0]\1[voice_hook_src]"
+        ),
+        isolated,
+    )
+    isolated = re.sub(
+        r"\[0:a:1\]([^;]*?),asplit=2\[game_hook_src\]\[game_att\]",
+        (
+            r"[0:a:1]\1[game_att];"
+            rf"[{hook_input_idx}:a:1]\1[game_hook_src]"
+        ),
+        isolated,
+    )
+    return isolated
 
 
 class FfmpegCliAdapter:
@@ -176,6 +202,13 @@ class FfmpegCliAdapter:
         for sfx_path in filter_spec.sfx_input_paths:
             command.extend(["-i", sfx_path])
 
+        hook_input_idx = BASE_AUDIO_MIX_INPUTS + len(filter_spec.sfx_input_paths)
+        command.extend(["-i", clean_video_path])
+        effective_filter_complex = _isolate_hook_input(
+            filter_spec.filter_complex,
+            hook_input_idx=hook_input_idx,
+        )
+
         if self._has_nvenc():
             video_codec_args = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20"]
         else:
@@ -184,7 +217,7 @@ class FfmpegCliAdapter:
         command.extend(
             [
                 "-filter_complex",
-                filter_spec.filter_complex,
+                effective_filter_complex,
                 "-map",
                 filter_spec.video_output_label,
                 "-map",
