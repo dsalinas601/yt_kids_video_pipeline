@@ -228,6 +228,41 @@ def _normalize_ad_segments(segments: tuple[TimeSegment, ...]) -> tuple[TimeSegme
     return tuple(merged)
 
 
+def _sanitize_raw_dynamic_event(idx: int, item: Any, warnings: list[str]) -> Any | None:
+    if not isinstance(item, dict):
+        return item
+    event_dict = dict(item)
+    seg = event_dict["segment"]
+    start_sec = float(seg["start_sec"])
+    end_sec = float(seg["end_sec"])
+    category = event_dict.get("category", "UNKNOWN")
+    if start_sec < 0 or end_sec < start_sec:
+        warnings.append(
+            f"Discarded invalid TimeSegment [{start_sec}, {end_sec}] "
+            f"in dynamic_events[{idx}] (category={category})."
+        )
+        return None
+    raw_text = event_dict.get("impact_text")
+    if isinstance(raw_text, str):
+        words = raw_text.strip().split()
+        if len(words) > MAX_EVENT_TEXT_WORDS:
+            truncated_text = " ".join(words[:MAX_EVENT_TEXT_WORDS])
+            event_dict["impact_text"] = truncated_text
+            warnings.append(
+                f"Truncated impact_text '{raw_text.strip()}' to '{truncated_text}' "
+                f"in dynamic_events[{idx}] (category={category})."
+            )
+    if end_sec == start_sec:
+        expanded_end = start_sec + DEFAULT_POINT_EVENT_DURATION_SEC
+        event_dict["segment"] = {"start_sec": start_sec, "end_sec": expanded_end}
+        warnings.append(
+            f"Expanded point TimeSegment [{start_sec}, {end_sec}] to "
+            f"[{start_sec}, {expanded_end}] in dynamic_events[{idx}] "
+            f"(category={category})."
+        )
+    return event_dict
+
+
 def sanitize_editorial_plan_dict(
     data: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
@@ -236,7 +271,8 @@ def sanitize_editorial_plan_dict(
     - Logs warning if mandatory ``hook_clip`` has invalid bounds (caller/validator will reject).
     - Discards inverted or zero-length ``ad_segments`` and ``safety_flags`` (never reorders).
     - Rescues point ``dynamic_events`` (``start_sec == end_sec >= 0``) by expanding ``end_sec``
-      by ``DEFAULT_POINT_EVENT_DURATION_SEC`` (+3.0s), and discards inverted/negative ones.
+      by ``DEFAULT_POINT_EVENT_DURATION_SEC`` (+3.0s), truncates ``impact_text`` exceeding
+      ``MAX_EVENT_TEXT_WORDS``, and discards inverted/negative ones.
     """
     sanitized = dict(data)
     warnings: list[str] = []
@@ -263,32 +299,9 @@ def sanitize_editorial_plan_dict(
 
     clean_events: list[Any] = []
     for idx, item in enumerate(sanitized.get("dynamic_events") or ()):
-        if isinstance(item, dict):
-            seg = item["segment"]
-            start_sec = float(seg["start_sec"])
-            end_sec = float(seg["end_sec"])
-            category = item.get("category", "UNKNOWN")
-            if start_sec >= 0 and end_sec == start_sec:
-                expanded_end = start_sec + DEFAULT_POINT_EVENT_DURATION_SEC
-                clean_events.append(
-                    {
-                        **item,
-                        "segment": {"start_sec": start_sec, "end_sec": expanded_end},
-                    }
-                )
-                warnings.append(
-                    f"Expanded point TimeSegment [{start_sec}, {end_sec}] to "
-                    f"[{start_sec}, {expanded_end}] in dynamic_events[{idx}] "
-                    f"(category={category})."
-                )
-                continue
-            if start_sec < 0 or end_sec < start_sec:
-                warnings.append(
-                    f"Discarded invalid TimeSegment [{start_sec}, {end_sec}] "
-                    f"in dynamic_events[{idx}] (category={category})."
-                )
-                continue
-        clean_events.append(item)
+        sanitized_event = _sanitize_raw_dynamic_event(idx, item, warnings)
+        if sanitized_event is not None:
+            clean_events.append(sanitized_event)
     sanitized["dynamic_events"] = clean_events
 
     clean_flags: list[Any] = []
