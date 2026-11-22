@@ -96,6 +96,9 @@ class FasterWhisperAdapter:
             temperature=0.0,
             beam_size=self._beam_size,
             vad_filter=True,
+            condition_on_previous_text=False,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=3,
         )
         return list(raw_segments)
 

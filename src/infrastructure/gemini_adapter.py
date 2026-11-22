@@ -55,7 +55,8 @@ ANALYSIS_PROMPT: str = (
     "internas del juego, menús ni pantallas de carga. Mínimo 2 segundos. "
     "IMPORTANTE: Todos los tiempos (start_sec, end_sec, thumbnail_timestamp) deben "
     "expresarse en segundos totales desde el inicio del video (MM*60 + SS), cumpliendo "
-    "siempre 0 <= start_sec < end_sec."
+    "siempre 0 <= start_sec < end_sec. PROHIBIDO escribir MM:SS como MMSS (por ejemplo: "
+    "el minuto 03:25 es 205.0, NUNCA 325.0; el minuto 06:22 es 382.0, NUNCA 622.0)."
 )
 
 

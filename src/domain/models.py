@@ -410,6 +410,110 @@ class EditorialPlan(BaseModel):
         return sum(segment.duration for segment in self.ad_segments)
 
 
+def _mmss_to_seconds(value: float) -> float:
+    minutes = int(value) // 100
+    seconds = value - (minutes * 100)
+    return round(minutes * 60.0 + seconds, 3)
+
+
+def _convert_segment_mmss(seg: TimeSegment) -> TimeSegment:
+    return TimeSegment(
+        start_sec=_mmss_to_seconds(seg.start_sec),
+        end_sec=_mmss_to_seconds(seg.end_sec),
+    )
+
+
+def normalize_plan_timestamps_to_duration(
+    plan: EditorialPlan,
+    duration_sec: float,
+) -> tuple[EditorialPlan, list[str]]:
+    """Detect and convert MMSS-encoded timestamps and clamp segments to video duration."""
+    warnings: list[str] = []
+    all_timestamps: list[float] = [
+        plan.hook_clip.start_sec,
+        plan.hook_clip.end_sec,
+        plan.metadata.thumbnail_timestamp,
+        *(ts for ev in plan.dynamic_events for ts in (ev.segment.start_sec, ev.segment.end_sec)),
+        *(ts for fl in plan.safety_flags for ts in (fl.segment.start_sec, fl.segment.end_sec)),
+        *(ts for ad in plan.ad_segments for ts in (ad.start_sec, ad.end_sec)),
+    ]
+
+    current_plan = plan
+    if any(ts > duration_sec for ts in all_timestamps) and all(
+        _mmss_to_seconds(ts) <= duration_sec for ts in all_timestamps
+    ):
+        warnings.append(
+            f"Detected MMSS-encoded timestamps exceeding video duration ({duration_sec:.2f}s); "
+            "converting plan timestamps from MMSS to total seconds (MM*60+SS)."
+        )
+        current_plan = EditorialPlan(
+            hook_clip=_convert_segment_mmss(plan.hook_clip),
+            dynamic_events=tuple(
+                ev.model_copy(update={"segment": _convert_segment_mmss(ev.segment)})
+                for ev in plan.dynamic_events
+            ),
+            safety_flags=tuple(
+                fl.model_copy(update={"segment": _convert_segment_mmss(fl.segment)})
+                for fl in plan.safety_flags
+            ),
+            ad_segments=tuple(_convert_segment_mmss(ad) for ad in plan.ad_segments),
+            metadata=plan.metadata.model_copy(
+                update={"thumbnail_timestamp": _mmss_to_seconds(plan.metadata.thumbnail_timestamp)}
+            ),
+            recipe_version=plan.recipe_version,
+            recipe_hash=plan.recipe_hash,
+            model_used=plan.model_used,
+        )
+
+    valid_events = tuple(
+        ev.model_copy(
+            update={
+                "segment": TimeSegment(
+                    start_sec=ev.segment.start_sec,
+                    end_sec=min(ev.segment.end_sec, duration_sec),
+                )
+            }
+        )
+        for ev in current_plan.dynamic_events
+        if ev.segment.start_sec < duration_sec
+    )
+    valid_flags = tuple(
+        fl.model_copy(
+            update={
+                "segment": TimeSegment(
+                    start_sec=fl.segment.start_sec,
+                    end_sec=min(fl.segment.end_sec, duration_sec),
+                )
+            }
+        )
+        for fl in current_plan.safety_flags
+        if fl.segment.start_sec < duration_sec
+    )
+    valid_ads = tuple(
+        TimeSegment(start_sec=ad.start_sec, end_sec=min(ad.end_sec, duration_sec))
+        for ad in current_plan.ad_segments
+        if ad.start_sec < duration_sec
+    )
+
+    if (
+        len(valid_events) != len(current_plan.dynamic_events)
+        or len(valid_flags) != len(current_plan.safety_flags)
+        or len(valid_ads) != len(current_plan.ad_segments)
+    ):
+        warnings.append(
+            f"Discarded or clamped segments exceeding clean video duration ({duration_sec:.2f}s)."
+        )
+        current_plan = current_plan.model_copy(
+            update={
+                "dynamic_events": valid_events,
+                "safety_flags": valid_flags,
+                "ad_segments": valid_ads,
+            }
+        )
+
+    return current_plan, warnings
+
+
 class PipelineOutput(BaseModel):
     """Verified output paths produced by the pipeline."""
 

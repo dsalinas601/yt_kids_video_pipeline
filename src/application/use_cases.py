@@ -26,7 +26,13 @@ from src.domain.coppa_rules import (
 )
 from src.domain.errors import DomainError, ThumbnailArtError
 from src.domain.ffmpeg_builder import build_filter_complex
-from src.domain.models import CleanVideo, EditorialPlan, PipelineOutput, SafetySeverity
+from src.domain.models import (
+    CleanVideo,
+    EditorialPlan,
+    PipelineOutput,
+    SafetySeverity,
+    normalize_plan_timestamps_to_duration,
+)
 from src.domain.recipe import EditorialRecipe, default_recipe
 
 
@@ -241,7 +247,21 @@ class ProcessVideoUseCase:
                 paths.proxy_path,
             )
         analysis = self._multimodal_analyzer.analyze_video(proxy_path)
-        enriched_plan = self._enrich_plan_with_coppa_and_recipe(analysis, transcript_segments)
+        normalized_plan, ts_warnings = normalize_plan_timestamps_to_duration(
+            analysis.plan,
+            clean_video.duration_sec,
+        )
+        for warning_msg in ts_warnings:
+            self._logger.warning("%s", warning_msg)
+        normalized_analysis = AnalysisResult(
+            plan=normalized_plan,
+            token_usage=analysis.token_usage,
+            model_used=analysis.model_used,
+        )
+        enriched_plan = self._enrich_plan_with_coppa_and_recipe(
+            normalized_analysis,
+            transcript_segments,
+        )
         self._storage.save_editorial_plan(enriched_plan, paths.editorial_plan_path)
         return enriched_plan, analysis.token_usage
 
