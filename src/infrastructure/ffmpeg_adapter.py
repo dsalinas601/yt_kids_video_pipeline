@@ -9,6 +9,8 @@ from src.domain.constants import PROXY_FPS, PROXY_HEIGHT
 from src.domain.ffmpeg_builder import FilterComplexSpec
 from src.domain.models import CleanVideo, RawRecording
 
+DEFAULT_SUBPROCESS_TIMEOUT_SEC: float = 1800.0
+
 
 class FfmpegCliAdapter:
     """MediaProcessorPort implementation using list[str] subprocess calls."""
@@ -17,9 +19,11 @@ class FfmpegCliAdapter:
         self,
         ffmpeg_bin: str = "ffmpeg",
         ffprobe_bin: str = "ffprobe",
+        timeout_sec: float = DEFAULT_SUBPROCESS_TIMEOUT_SEC,
     ) -> None:
         self._ffmpeg_bin = ffmpeg_bin
         self._ffprobe_bin = ffprobe_bin
+        self._timeout_sec = timeout_sec
 
     def probe_recording(self, input_path: str) -> RawRecording:
         """Inspect raw recording via ffprobe and construct validated RawRecording."""
@@ -66,7 +70,13 @@ class FfmpegCliAdapter:
             "96k",
             proxy_output_path,
         ]
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=self._timeout_sec,
+        )
         return proxy_output_path
 
     def extract_frame(
@@ -89,7 +99,13 @@ class FfmpegCliAdapter:
             "2",
             output_image_path,
         ]
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=self._timeout_sec,
+        )
         return output_image_path
 
     def render_final_video(
@@ -137,7 +153,13 @@ class FfmpegCliAdapter:
                 output_video_path,
             ]
         )
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=self._timeout_sec,
+        )
         return output_video_path
 
     def _has_nvenc(self) -> bool:
@@ -160,7 +182,13 @@ class FfmpegCliAdapter:
             "json",
             media_path,
         ]
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=self._timeout_sec,
+        )
         payload = json.loads(result.stdout)
         streams = payload.get("streams", [])
         video_streams = [s for s in streams if s.get("codec_type") == "video"]

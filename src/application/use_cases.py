@@ -172,10 +172,15 @@ class ProcessVideoUseCase:
             plan = self._storage.load_editorial_plan(paths.editorial_plan_path)
             return plan, TokenUsage(input_tokens=0, output_tokens=0)
 
-        proxy_path = self._media_processor.generate_proxy(
-            clean_video.file_path,
-            paths.proxy_path,
-        )
+        if not force_reanalyze and self._storage.exists(paths.proxy_path):
+            self._logger.info("Cache hit for proxy_360p.mp4: %s", paths.proxy_path)
+            proxy_path = paths.proxy_path
+        else:
+            self._logger.info("Generating 360p/15fps proxy video: %s", paths.proxy_path)
+            proxy_path = self._media_processor.generate_proxy(
+                clean_video.file_path,
+                paths.proxy_path,
+            )
         analysis = self._multimodal_analyzer.analyze_video(proxy_path)
         self._storage.save_editorial_plan(analysis.plan, paths.editorial_plan_path)
         return analysis.plan, analysis.token_usage

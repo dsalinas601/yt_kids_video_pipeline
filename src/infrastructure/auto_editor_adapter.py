@@ -12,12 +12,19 @@ from src.domain.constants import (
 )
 from src.domain.models import CleanVideo, RawRecording
 
+DEFAULT_AUTO_EDITOR_TIMEOUT_SEC: float = 1800.0
+
 
 class AutoEditorCliAdapter:
     """SilenceRemoverPort implementation invoking auto-editor v29.3.1 CLI safely."""
 
-    def __init__(self, executable: str = "auto-editor") -> None:
+    def __init__(
+        self,
+        executable: str = "auto-editor",
+        timeout_sec: float = DEFAULT_AUTO_EDITOR_TIMEOUT_SEC,
+    ) -> None:
         self._executable = executable
+        self._timeout_sec = timeout_sec
 
     def remove_silences(self, raw_recording: RawRecording, output_clean_path: str) -> CleanVideo:
         """Analyze voice track 0:a:0 only and export clean_base.mp4 preserving separate tracks.
@@ -37,7 +44,13 @@ class AutoEditorCliAdapter:
             output_clean_path,
         ]
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout_sec,
+            )
         except subprocess.CalledProcessError as exc:
             Path(output_clean_path).unlink(missing_ok=True)
             for stream_output in (exc.stdout, exc.stderr):

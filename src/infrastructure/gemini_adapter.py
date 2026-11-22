@@ -4,9 +4,12 @@ import json
 import logging
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from src.application.ports import AnalysisResult, TokenUsage
+from src.domain.constants import MILLISECONDS_PER_SECOND
 from src.domain.errors import DomainError
 from src.domain.models import EditorialPlan, sanitize_editorial_plan_dict
 
@@ -16,6 +19,7 @@ DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
 )
+DEFAULT_REQUEST_TIMEOUT_SEC: float = 600.0
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 RETRYABLE_ERROR_MARKERS: tuple[str, ...] = (
     "503",
@@ -60,6 +64,7 @@ class GeminiApiAdapter:
         fallback_models: Sequence[str] = DEFAULT_FALLBACK_MODELS,
         poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         max_poll_attempts: int = DEFAULT_MAX_POLL_ATTEMPTS,
+        request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC,
         sleep_fn: Callable[[float], None] = time.sleep,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -72,14 +77,24 @@ class GeminiApiAdapter:
         self._fallback_models: tuple[str, ...] = tuple(fallback_models)
         self._poll_interval_sec = poll_interval_sec
         self._max_poll_attempts = max_poll_attempts
+        self._request_timeout_sec = request_timeout_sec
         self._sleep_fn = sleep_fn
         self._logger = logger or logging.getLogger(DEFAULT_LOGGER_NAME)
 
     def analyze_video(self, proxy_video_path: str) -> AnalysisResult:
         """Upload proxy to File API, poll until ACTIVE, analyze with model fallback, and delete."""
-        uploaded_file = self._client.files.upload(file=proxy_video_path)
+        self._logger.info("Uploading proxy video to Gemini File API: %s", proxy_video_path)
+        uploaded_file = self._run_with_timeout(
+            lambda: self._client.files.upload(file=proxy_video_path)
+        )
         try:
+            self._logger.info(
+                "Proxy uploaded as '%s' (state=%s); waiting for ACTIVE state...",
+                uploaded_file.name,
+                uploaded_file.state.name,
+            )
             active_file = self._wait_until_active(uploaded_file)
+            self._logger.info("Gemini file '%s' is ACTIVE.", active_file.name)
             plan, token_usage = self._generate_with_fallback(active_file)
             return AnalysisResult(plan=plan, token_usage=token_usage)
         finally:
@@ -87,15 +102,24 @@ class GeminiApiAdapter:
 
     def _generate_with_fallback(self, active_file: Any) -> tuple[EditorialPlan, TokenUsage]:
         models_to_try = (self._model_name, *self._fallback_models)
+        timeout_ms = int(self._request_timeout_sec * MILLISECONDS_PER_SECOND)
         for idx, candidate_model in enumerate(models_to_try):
             try:
-                response = self._client.models.generate_content(
-                    model=candidate_model,
-                    contents=[active_file, ANALYSIS_PROMPT],
-                    config={
-                        "response_mime_type": "application/json",
-                        "response_schema": EditorialPlan,
-                    },
+                self._logger.info(
+                    "Requesting multimodal analysis from Gemini model '%s' (timeout=%.0fs)...",
+                    candidate_model,
+                    self._request_timeout_sec,
+                )
+                response = self._run_with_timeout(
+                    lambda model=candidate_model: self._client.models.generate_content(
+                        model=model,
+                        contents=[active_file, ANALYSIS_PROMPT],
+                        config={
+                            "response_mime_type": "application/json",
+                            "response_schema": EditorialPlan,
+                            "http_options": {"timeout": timeout_ms},
+                        },
+                    )
                 )
                 plan = self._extract_plan(response)
                 token_usage = self._extract_token_usage(response)
@@ -117,9 +141,21 @@ class GeminiApiAdapter:
                 )
         raise RuntimeError("No Gemini models configured for analysis.")  # pragma: no cover
 
+    def _run_with_timeout(self, operation: Callable[[], Any]) -> Any:
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(operation)
+        try:
+            return future.result(timeout=self._request_timeout_sec)
+        except FuturesTimeoutError as exc:
+            raise TimeoutError(
+                f"Gemini request timed out after {self._request_timeout_sec}s."
+            ) from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     @staticmethod
     def _is_fallback_eligible(exc: Exception) -> bool:
-        if isinstance(exc, DomainError):
+        if isinstance(exc, (DomainError, TimeoutError)):
             return True
         code = getattr(exc, "code", None)
         if isinstance(code, int) and code in RETRYABLE_STATUS_CODES:
