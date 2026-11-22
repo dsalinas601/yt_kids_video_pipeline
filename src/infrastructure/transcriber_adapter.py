@@ -1,5 +1,7 @@
 """Faster-Whisper voice transcriber adapter for deterministic COPPA auditing."""
 
+import wave
+from pathlib import Path
 from typing import Any
 
 from src.domain.coppa_rules import TranscriptSegment
@@ -7,6 +9,19 @@ from src.domain.coppa_rules import TranscriptSegment
 DEFAULT_WHISPER_MODEL_SIZE: str = "large-v3"
 DEFAULT_WHISPER_LANGUAGE: str = "es"
 DEFAULT_WHISPER_BEAM_SIZE: int = 5
+PCM_INT16_SCALE: float = 32768.0
+
+
+def _load_pcm16_wav_as_float32_array(audio_wav_path: str) -> Any:
+    """Load a 16kHz mono PCM16 WAV into a 1D float32 numpy array, bypassing PyAV."""
+    wav_file = Path(audio_wav_path)
+    if not wav_file.exists():
+        return audio_wav_path
+    import numpy as np  # noqa: PLC0415
+
+    with wave.open(str(wav_file), "rb") as wf:
+        pcm_bytes = wf.readframes(wf.getnframes())
+    return np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / PCM_INT16_SCALE
 
 
 class FasterWhisperAdapter:
@@ -46,8 +61,9 @@ class FasterWhisperAdapter:
     def transcribe(self, audio_wav_path: str) -> tuple[TranscriptSegment, ...]:
         """Transcribe 16kHz mono voice track with temperature=0.0 for deterministic output."""
         model = self._get_or_create_model()
+        audio_input = _load_pcm16_wav_as_float32_array(audio_wav_path)
         raw_segments, _ = model.transcribe(
-            audio_wav_path,
+            audio_input,
             language=self._language,
             temperature=0.0,
             beam_size=self._beam_size,
