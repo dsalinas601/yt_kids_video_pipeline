@@ -6,9 +6,11 @@ from src.infrastructure.gemini_adapter import GeminiApiAdapter
 from src.infrastructure.gemini_image_adapter import GeminiImageAdapter
 from src.infrastructure.storage_adapter import LocalOrDriveFsAdapter
 from src.infrastructure.thumbnail_adapter import PillowThumbnailAdapter
+from src.infrastructure.transcriber_adapter import FasterWhisperAdapter
 
 __all__ = [
     "AutoEditorCliAdapter",
+    "FasterWhisperAdapter",
     "FfmpegCliAdapter",
     "GeminiApiAdapter",
     "GeminiImageAdapter",

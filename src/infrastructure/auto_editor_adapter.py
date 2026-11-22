@@ -11,6 +11,7 @@ from src.domain.constants import (
     SILENCE_MIN_CUT_SEC,
 )
 from src.domain.models import CleanVideo, RawRecording
+from src.domain.recipe import EditorialRecipe
 
 DEFAULT_AUTO_EDITOR_TIMEOUT_SEC: float = 1800.0
 
@@ -22,9 +23,20 @@ class AutoEditorCliAdapter:
         self,
         executable: str = "auto-editor",
         timeout_sec: float = DEFAULT_AUTO_EDITOR_TIMEOUT_SEC,
+        recipe: EditorialRecipe | None = None,
     ) -> None:
         self._executable = executable
         self._timeout_sec = timeout_sec
+        if recipe is not None:
+            self._min_cut_sec = recipe.silence.min_cut_sec
+            self._min_clip_sec = recipe.silence.min_clip_sec
+            self._margin_before_sec = recipe.silence.margin_before_sec
+            self._margin_after_sec = recipe.silence.margin_after_sec
+        else:
+            self._min_cut_sec = SILENCE_MIN_CUT_SEC
+            self._min_clip_sec = SILENCE_MIN_CLIP_SEC
+            self._margin_before_sec = SILENCE_MARGIN_BEFORE_SEC
+            self._margin_after_sec = SILENCE_MARGIN_AFTER_SEC
 
     def remove_silences(self, raw_recording: RawRecording, output_clean_path: str) -> CleanVideo:
         """Analyze voice track 0:a:0 only and export clean_base.mp4 preserving separate tracks.
@@ -36,9 +48,9 @@ class AutoEditorCliAdapter:
             self._executable,
             raw_recording.file_path,
             "--edit",
-            f"audio:stream=0,mincut={SILENCE_MIN_CUT_SEC}s,minclip={SILENCE_MIN_CLIP_SEC}s",
+            f"audio:stream=0,mincut={self._min_cut_sec}s,minclip={self._min_clip_sec}s",
             "--margin",
-            f"{SILENCE_MARGIN_BEFORE_SEC}s,{SILENCE_MARGIN_AFTER_SEC}s",
+            f"{self._margin_before_sec}s,{self._margin_after_sec}s",
             "--no-open",
             "--output",
             output_clean_path,

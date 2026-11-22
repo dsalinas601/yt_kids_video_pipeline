@@ -9,16 +9,21 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from src.application.ports import AnalysisResult, TokenUsage
-from src.domain.constants import MILLISECONDS_PER_SECOND
+from src.domain.constants import (
+    DEFAULT_AI_FALLBACK_MODELS,
+    DEFAULT_AI_PRIMARY_MODEL,
+    DEFAULT_AI_SEED,
+    DEFAULT_AI_TEMPERATURE,
+    DEFAULT_AI_TOP_P,
+    MILLISECONDS_PER_SECOND,
+)
 from src.domain.errors import DomainError
 from src.domain.models import EditorialPlan, sanitize_editorial_plan_dict
+from src.domain.recipe import EditorialRecipe
 
 DEFAULT_LOGGER_NAME: str = "yt_kids_video_pipeline"
-DEFAULT_GEMINI_MODEL: str = "gemini-3.8-flash"
-DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-)
+DEFAULT_GEMINI_MODEL: str = DEFAULT_AI_PRIMARY_MODEL
+DEFAULT_FALLBACK_MODELS: tuple[str, ...] = DEFAULT_AI_FALLBACK_MODELS
 DEFAULT_REQUEST_TIMEOUT_SEC: float = 600.0
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 RETRYABLE_ERROR_MARKERS: tuple[str, ...] = (
@@ -36,7 +41,8 @@ ACTIVE_STATE_NAME: str = "ACTIVE"
 
 ANALYSIS_PROMPT: str = (
     "Analiza este video proxy de gaming infantil en español para YouTube Kids. "
-    "Identifica: 1) el mejor hook_clip inicial de 8 a 15 segundos (nunca sobre un anuncio), "
+    "Identifica: 1) el mejor hook_clip inicial de 8 a 15 segundos (nunca sobre un anuncio "
+    "ni sobre un tramo con alerta COPPA), "
     "2) eventos dinámicos clave (SURPRISE, LAUGH, VICTORY, FAIL) con tipo de zoom "
     "(CORNER_ZOOM_15 o FACE_CLOSEUP_50) y texto corto opcional de máximo 2 palabras, "
     "3) auditoría COPPA de safety_flags (WARNING o CRITICAL por datos personales o "
@@ -53,6 +59,17 @@ ANALYSIS_PROMPT: str = (
 )
 
 
+def _build_prompt_for_recipe(recipe: EditorialRecipe | None) -> str:
+    if recipe is None:
+        return ANALYSIS_PROMPT
+    return (
+        f"{ANALYSIS_PROMPT} "
+        f"REGLA DE HOOK (receta {recipe.recipe_name} v{recipe.version}): "
+        f"Evita elegir los primeros {recipe.hook.exclude_first_sec} segundos del video "
+        f"(saludo inicial). Rúbrica del hook: {recipe.hook.rubric}"
+    )
+
+
 class GeminiApiAdapter:
     """MultimodalAnalyzerPort implementation backed by google-genai File API."""
 
@@ -62,6 +79,11 @@ class GeminiApiAdapter:
         client: Any | None = None,
         model_name: str = DEFAULT_GEMINI_MODEL,
         fallback_models: Sequence[str] = DEFAULT_FALLBACK_MODELS,
+        temperature: float = DEFAULT_AI_TEMPERATURE,
+        seed: int = DEFAULT_AI_SEED,
+        top_p: float = DEFAULT_AI_TOP_P,
+        same_model_retries: int = 0,
+        recipe: EditorialRecipe | None = None,
         poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         max_poll_attempts: int = DEFAULT_MAX_POLL_ATTEMPTS,
         request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC,
@@ -73,8 +95,21 @@ class GeminiApiAdapter:
 
             client = genai.Client(api_key=api_key)
         self._client = client
-        self._model_name = model_name
-        self._fallback_models: tuple[str, ...] = tuple(fallback_models)
+        if recipe is not None:
+            self._model_name = recipe.ai.primary_model
+            self._fallback_models: tuple[str, ...] = recipe.ai.fallback_models
+            self._temperature = recipe.ai.temperature
+            self._seed = recipe.ai.seed
+            self._top_p = recipe.ai.top_p
+            self._same_model_retries = recipe.ai.same_model_retries
+        else:
+            self._model_name = model_name
+            self._fallback_models = tuple(fallback_models)
+            self._temperature = temperature
+            self._seed = seed
+            self._top_p = top_p
+            self._same_model_retries = same_model_retries
+        self._prompt = _build_prompt_for_recipe(recipe)
         self._poll_interval_sec = poll_interval_sec
         self._max_poll_attempts = max_poll_attempts
         self._request_timeout_sec = request_timeout_sec
@@ -95,28 +130,42 @@ class GeminiApiAdapter:
             )
             active_file = self._wait_until_active(uploaded_file)
             self._logger.info("Gemini file '%s' is ACTIVE.", active_file.name)
-            plan, token_usage = self._generate_with_fallback(active_file)
-            return AnalysisResult(plan=plan, token_usage=token_usage)
+            plan, token_usage, model_used = self._generate_with_fallback(active_file)
+            return AnalysisResult(
+                plan=plan,
+                token_usage=token_usage,
+                model_used=model_used,
+            )
         finally:
             self._client.files.delete(name=uploaded_file.name)
 
-    def _generate_with_fallback(self, active_file: Any) -> tuple[EditorialPlan, TokenUsage]:
-        models_to_try = (self._model_name, *self._fallback_models)
+    def _build_attempt_sequence(self) -> tuple[str, ...]:
+        primary_attempts = (self._model_name,) * (1 + max(0, self._same_model_retries))
+        return (*primary_attempts, *self._fallback_models)
+
+    def _generate_with_fallback(self, active_file: Any) -> tuple[EditorialPlan, TokenUsage, str]:
+        models_to_try = self._build_attempt_sequence()
         timeout_ms = int(self._request_timeout_sec * MILLISECONDS_PER_SECOND)
         for idx, candidate_model in enumerate(models_to_try):
             try:
                 self._logger.info(
-                    "Requesting multimodal analysis from Gemini model '%s' (timeout=%.0fs)...",
+                    "Requesting multimodal analysis from Gemini model '%s' "
+                    "(temp=%.2f, seed=%d, timeout=%.0fs)...",
                     candidate_model,
+                    self._temperature,
+                    self._seed,
                     self._request_timeout_sec,
                 )
                 response = self._run_with_timeout(
                     lambda model=candidate_model: self._client.models.generate_content(
                         model=model,
-                        contents=[active_file, ANALYSIS_PROMPT],
+                        contents=[active_file, self._prompt],
                         config={
                             "response_mime_type": "application/json",
                             "response_schema": EditorialPlan,
+                            "temperature": self._temperature,
+                            "seed": self._seed,
+                            "top_p": self._top_p,
                             "http_options": {"timeout": timeout_ms},
                         },
                     )
@@ -127,14 +176,14 @@ class GeminiApiAdapter:
                     "Gemini multimodal analysis completed using model '%s'.",
                     candidate_model,
                 )
-                return plan, token_usage
+                return plan, token_usage, candidate_model
             except Exception as exc:
                 has_next_model = idx + 1 < len(models_to_try)
                 if not (has_next_model and self._is_fallback_eligible(exc)):
                     raise
                 next_model = models_to_try[idx + 1]
                 self._logger.warning(
-                    "Gemini model '%s' failed (%s); falling back to '%s'.",
+                    "Gemini model '%s' failed (%s); retrying with '%s'.",
                     candidate_model,
                     exc,
                     next_model,

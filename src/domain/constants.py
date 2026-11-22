@@ -9,6 +9,7 @@ SILENCE_MIN_CLIP_SEC: float = 0.1
 
 MIN_HOOK_DURATION_SEC: float = 8.0
 MAX_HOOK_DURATION_SEC: float = 15.0
+DEFAULT_HOOK_EXCLUDE_FIRST_SEC: float = 30.0
 
 MIN_EVENT_GAP_SEC: float = 10.0
 MAX_EVENT_TEXT_WORDS: int = 2
@@ -34,7 +35,28 @@ MUSIC_DROP_DURATION_SEC: float = 2.0
 
 PROXY_HEIGHT: int = 360
 PROXY_FPS: int = 15
+PROXY_VOICE_VOLUME: float = 1.0
+PROXY_GAME_VOLUME: float = 0.25
+VOICE_TRACK_SAMPLE_RATE: int = 16000
+VOICE_TRACK_CHANNELS: int = 1
 MILLISECONDS_PER_SECOND: int = 1000
+
+DEFAULT_RECIPE_NAME: str = "kids_gaming"
+DEFAULT_RECIPE_VERSION: str = "1.0.0"
+DEFAULT_RECIPE_REL_PATH: str = "recipes/kids_gaming.v1.yaml"
+RECIPE_HASH_HEX_LENGTH: int = 12
+
+DEFAULT_AI_PRIMARY_MODEL: str = "gemini-3.8-flash"
+DEFAULT_AI_FALLBACK_MODELS: tuple[str, ...] = (
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+)
+DEFAULT_AI_TEMPERATURE: float = 0.0
+DEFAULT_AI_SEED: int = 42
+DEFAULT_AI_TOP_P: float = 0.95
+DEFAULT_SAME_MODEL_RETRIES: int = 1
+
+DEFAULT_COPPA_PADDING_SEC: float = 0.5
 
 ASSET_INTRO_REL_PATH: str = "00_assets/intro.mp4"
 ASSET_SFX_DIR_REL_PATH: str = "00_assets/sfx"

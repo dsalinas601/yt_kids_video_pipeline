@@ -9,6 +9,7 @@ from src.application.ports import (
     ThumbnailArtGeneratorPort,
     ThumbnailGeneratorPort,
     TokenUsage,
+    TranscriberPort,
     VideoWorkspacePaths,
 )
 from src.application.use_cases import ProcessVideoUseCase
@@ -23,5 +24,6 @@ __all__ = [
     "ThumbnailArtGeneratorPort",
     "ThumbnailGeneratorPort",
     "TokenUsage",
+    "TranscriberPort",
     "VideoWorkspacePaths",
 ]

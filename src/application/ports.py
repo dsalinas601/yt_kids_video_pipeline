@@ -1,10 +1,13 @@
 """Application layer ports (Protocol interfaces) and DTOs."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from src.domain.coppa_rules import TranscriptSegment
 from src.domain.ffmpeg_builder import FilterComplexSpec
 from src.domain.models import CleanVideo, EditorialPlan, RawRecording
+from src.domain.recipe import EditorialRecipe
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class AnalysisResult:
 
     plan: EditorialPlan
     token_usage: TokenUsage
+    model_used: str = ""
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,9 @@ class VideoWorkspacePaths:
     sfx_dir: str
     masked_frame_path: str = ""
     thumbnail_art_path: str = ""
+    voice_track_path: str = ""
+    transcript_path: str = ""
+    editorial_review_path: str = ""
 
 
 class SilenceRemoverPort(Protocol):
@@ -56,6 +63,13 @@ class MultimodalAnalyzerPort(Protocol):
         """Analyze proxy video and return validated EditorialPlan with token metrics."""
 
 
+class TranscriberPort(Protocol):
+    """Port for deterministic voice-track transcription with timestamps."""
+
+    def transcribe(self, audio_wav_path: str) -> tuple[TranscriptSegment, ...]:
+        """Transcribe voice audio file and return timestamped segments."""
+
+
 class MediaProcessorPort(Protocol):
     """Port for probing media, generating proxies, extracting frames, and rendering."""
 
@@ -67,6 +81,9 @@ class MediaProcessorPort(Protocol):
 
     def generate_proxy(self, clean_video_path: str, proxy_output_path: str) -> str:
         """Generate a lightweight 360p/15fps proxy video from clean_base.mp4."""
+
+    def extract_voice_track(self, clean_video_path: str, output_wav_path: str) -> str:
+        """Extract voice stream 0:a:0 as 16kHz mono WAV for deterministic transcription."""
 
     def extract_frame(
         self,
@@ -132,11 +149,23 @@ class StorageRepositoryPort(Protocol):
     def exists(self, path: str) -> bool:
         """Return whether an artifact exists at path."""
 
+    def load_recipe(self, path: str) -> EditorialRecipe:
+        """Load and validate an EditorialRecipe from a YAML file."""
+
     def load_editorial_plan(self, path: str) -> EditorialPlan:
         """Load and validate an EditorialPlan from JSON."""
 
     def save_editorial_plan(self, plan: EditorialPlan, path: str) -> None:
         """Persist an EditorialPlan to JSON."""
+
+    def load_transcript(self, path: str) -> tuple[TranscriptSegment, ...]:
+        """Load cached voice transcript segments from JSON."""
+
+    def save_transcript(self, segments: Sequence[TranscriptSegment], path: str) -> None:
+        """Persist voice transcript segments to JSON."""
+
+    def save_editorial_review(self, markdown_content: str, path: str) -> None:
+        """Persist human-readable editorial review markdown."""
 
     def save_metadata_and_audit(self, payload: dict[str, Any], path: str) -> None:
         """Persist metadata_and_audit.json."""

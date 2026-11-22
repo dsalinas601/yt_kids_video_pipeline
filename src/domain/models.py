@@ -11,6 +11,7 @@ from src.domain.constants import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
     DEFAULT_POINT_EVENT_DURATION_SEC,
+    DEFAULT_RECIPE_VERSION,
     MAX_EVENT_TEXT_WORDS,
     MAX_HOOK_DURATION_SEC,
     MIN_AUDIO_TRACKS,
@@ -177,6 +178,7 @@ class SafetyFlag(BaseModel):
     segment: TimeSegment
     severity: SafetySeverity
     reason: str
+    source: str = "ai"
 
     @model_validator(mode="after")
     def _validate_reason(self) -> "SafetyFlag":
@@ -319,6 +321,9 @@ class EditorialPlan(BaseModel):
     safety_flags: tuple[SafetyFlag, ...] = Field(default=())
     ad_segments: tuple[TimeSegment, ...] = Field(default=())
     metadata: VideoMetadata
+    recipe_version: str = DEFAULT_RECIPE_VERSION
+    recipe_hash: str = ""
+    model_used: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -345,6 +350,13 @@ class EditorialPlan(BaseModel):
 
         if any(ad.overlaps(self.hook_clip) for ad in normalized_ads):
             raise DomainError("EditorialPlan hook_clip must not overlap any ad_segment.")
+
+        if any(
+            flag.segment.overlaps(self.hook_clip)
+            for flag in self.safety_flags
+            if flag.severity == SafetySeverity.CRITICAL
+        ):
+            raise DomainError("EditorialPlan hook_clip must not overlap any CRITICAL safety_flag.")
 
         sorted_events = sorted(
             (

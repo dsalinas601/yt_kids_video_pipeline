@@ -23,6 +23,7 @@ from src.domain.models import (
     TimeSegment,
     ZoomType,
 )
+from src.domain.recipe import EditorialRecipe
 
 SFX_INPUT_START_INDEX: int = 3
 BASE_AUDIO_MIX_INPUTS: int = 3
@@ -98,11 +99,14 @@ def _build_coppa_mute_filters(safety_flags: tuple[SafetyFlag, ...]) -> list[str]
     ]
 
 
-def _build_bgm_drop_filters(events: tuple[DynamicEvent, ...]) -> list[str]:
+def _build_bgm_drop_filters(
+    events: tuple[DynamicEvent, ...],
+    music_drop_sec: float = MUSIC_DROP_DURATION_SEC,
+) -> list[str]:
     return [
         (
             f"volume=enable='between(t,{event.segment.start_sec},"
-            f"{event.segment.start_sec + MUSIC_DROP_DURATION_SEC})':volume=0"
+            f"{event.segment.start_sec + music_drop_sec})':volume=0"
         )
         for event in events
         if event.category in MUSIC_DROP_CATEGORIES
@@ -159,16 +163,20 @@ def build_filter_complex(
     plan: EditorialPlan,
     font_path: str,
     sfx_dir: str = ASSET_SFX_DIR_REL_PATH,
+    recipe: EditorialRecipe | None = None,
 ) -> FilterComplexSpec:
     """Build the complete deterministic FFmpeg filter_complex graph for an EditorialPlan."""
     chains: list[str] = []
+    voice_lufs = recipe.audio.voice_lufs if recipe is not None else VOICE_TARGET_LUFS
+    game_lufs = recipe.audio.game_target_lufs if recipe is not None else GAME_TARGET_LUFS
+    music_drop_sec = recipe.audio.music_drop_sec if recipe is not None else MUSIC_DROP_DURATION_SEC
 
     # 1. Split raw clean_base video and normalized voice/game audio streams for hook + gameplay
     chains.append("[0:v:0]split=2[v_hook_src][v_main_src]")
 
     coppa_filters = _build_coppa_mute_filters(plan.safety_flags)
     voice_norm_chain = (
-        f"loudnorm=I={VOICE_TARGET_LUFS}:TP=-1.5:LRA=11,"
+        f"loudnorm=I={voice_lufs}:TP=-1.5:LRA=11,"
         f"aresample={AUDIO_SAMPLE_RATE},"
         "asplit=3[voice_hook_src][voice_mix][voice_sc]"
     )
@@ -178,7 +186,7 @@ def build_filter_complex(
         chains.append(f"[0:a:0]{voice_norm_chain}")
 
     chains.append(
-        f"[0:a:1]loudnorm=I={GAME_TARGET_LUFS}:TP=-1.5:LRA=11,"
+        f"[0:a:1]loudnorm=I={game_lufs}:TP=-1.5:LRA=11,"
         f"aresample={AUDIO_SAMPLE_RATE},"
         "asplit=2[game_hook_src][game_att]"
     )
@@ -214,7 +222,7 @@ def build_filter_complex(
     )
 
     # 4. Audio mixing: -14 LUFS voice, -26 LUFS game, sidechaincompress + Music Drops on bgm, SFX
-    bgm_drops = _build_bgm_drop_filters(plan.dynamic_events)
+    bgm_drops = _build_bgm_drop_filters(plan.dynamic_events, music_drop_sec=music_drop_sec)
     if bgm_drops:
         chains.append(f"[2:a:0]{','.join(bgm_drops)}[bgm_dropped]")
         bgm_source_label = "[bgm_dropped]"

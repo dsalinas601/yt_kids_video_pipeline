@@ -5,7 +5,15 @@ import subprocess
 from fractions import Fraction
 from typing import Any
 
-from src.domain.constants import PROXY_FPS, PROXY_HEIGHT
+from src.domain.constants import (
+    AUDIO_SAMPLE_RATE,
+    PROXY_FPS,
+    PROXY_GAME_VOLUME,
+    PROXY_HEIGHT,
+    PROXY_VOICE_VOLUME,
+    VOICE_TRACK_CHANNELS,
+    VOICE_TRACK_SAMPLE_RATE,
+)
 from src.domain.ffmpeg_builder import FilterComplexSpec
 from src.domain.models import CleanVideo, RawRecording
 
@@ -50,17 +58,29 @@ class FfmpegCliAdapter:
         )
 
     def generate_proxy(self, clean_video_path: str, proxy_output_path: str) -> str:
-        """Generate a 360p/15fps proxy video from clean_base.mp4."""
+        """Generate a 360p/15fps proxy video mixing voice (100%) and game audio (25%)."""
         if self._has_nvenc():
             video_codec_args = ["-c:v", "h264_nvenc", "-preset", "p4"]
         else:
             video_codec_args = ["-c:v", "libx264", "-preset", "ultrafast"]
+
+        proxy_audio_mix = (
+            f"[0:a:0]aresample={AUDIO_SAMPLE_RATE},volume={PROXY_VOICE_VOLUME}[v];"
+            f"[0:a:1]aresample={AUDIO_SAMPLE_RATE},volume={PROXY_GAME_VOLUME}[g];"
+            "[v][g]amix=inputs=2:duration=first:normalize=0[aout]"
+        )
 
         command: list[str] = [
             self._ffmpeg_bin,
             "-y",
             "-i",
             clean_video_path,
+            "-filter_complex",
+            proxy_audio_mix,
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
             "-vf",
             f"scale=-2:{PROXY_HEIGHT},fps={PROXY_FPS}",
             *video_codec_args,
@@ -78,6 +98,32 @@ class FfmpegCliAdapter:
             timeout=self._timeout_sec,
         )
         return proxy_output_path
+
+    def extract_voice_track(self, clean_video_path: str, output_wav_path: str) -> str:
+        """Extract voice stream 0:a:0 as 16kHz mono PCM WAV for transcription."""
+        command: list[str] = [
+            self._ffmpeg_bin,
+            "-y",
+            "-i",
+            clean_video_path,
+            "-map",
+            "0:a:0",
+            "-ac",
+            str(VOICE_TRACK_CHANNELS),
+            "-ar",
+            str(VOICE_TRACK_SAMPLE_RATE),
+            "-c:a",
+            "pcm_s16le",
+            output_wav_path,
+        ]
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=self._timeout_sec,
+        )
+        return output_wav_path
 
     def extract_frame(
         self,

@@ -1,11 +1,16 @@
 """Local or Google Drive filesystem storage adapter."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from src.application.ports import VideoWorkspacePaths
+from src.domain.coppa_rules import TranscriptSegment
 from src.domain.models import EditorialPlan
+from src.domain.recipe import EditorialRecipe
 
 
 class LocalOrDriveFsAdapter:
@@ -52,11 +57,19 @@ class LocalOrDriveFsAdapter:
             sfx_dir=str(sfx_dir),
             masked_frame_path=str(staging_dir / "thumb_masked.png"),
             thumbnail_art_path=str(staging_dir / "thumb_art.png"),
+            voice_track_path=str(staging_dir / "voice_track.wav"),
+            transcript_path=str(staging_dir / "transcript.json"),
+            editorial_review_path=str(staging_dir / "editorial_review.md"),
         )
 
     def exists(self, path: str) -> bool:
         """Return whether the path exists on disk."""
         return Path(path).exists()
+
+    def load_recipe(self, path: str) -> EditorialRecipe:
+        """Load and validate an EditorialRecipe from a YAML file."""
+        raw_data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        return EditorialRecipe.model_validate(raw_data or {})
 
     def load_editorial_plan(self, path: str) -> EditorialPlan:
         """Read and validate EditorialPlan from JSON file."""
@@ -68,6 +81,27 @@ class LocalOrDriveFsAdapter:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+
+    def load_transcript(self, path: str) -> tuple[TranscriptSegment, ...]:
+        """Read and validate cached TranscriptSegment list from JSON file."""
+        raw_items = json.loads(Path(path).read_text(encoding="utf-8"))
+        return tuple(TranscriptSegment.model_validate(item) for item in raw_items)
+
+    def save_transcript(self, segments: Sequence[TranscriptSegment], path: str) -> None:
+        """Write TranscriptSegment list to JSON file."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = [seg.model_dump(mode="json") for seg in segments]
+        target.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def save_editorial_review(self, markdown_content: str, path: str) -> None:
+        """Write human-readable editorial review markdown to disk."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(markdown_content, encoding="utf-8")
 
     def save_metadata_and_audit(self, payload: dict[str, Any], path: str) -> None:
         """Write metadata_and_audit.json to disk."""
